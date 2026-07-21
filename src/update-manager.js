@@ -110,7 +110,9 @@ class UpdateManager {
   }
   async install() {
     if (!this.packaged) throw new Error('开发模式不能执行自更新'); if (!this.readyUpdate) throw new Error('没有已下载并校验的更新');
-    const helper = path.join(__dirname, 'update-helper.ps1').replace('app.asar', 'app.asar.unpacked');
+    const stagedHelper = path.join(this.readyUpdate.contentDir, 'resources', 'app.asar.unpacked', 'src', 'update-helper.ps1');
+    const currentHelper = path.join(__dirname, 'update-helper.ps1').replace('app.asar', 'app.asar.unpacked');
+    const helper = fs.existsSync(stagedHelper) ? stagedHelper : currentHelper;
     const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper, '-ParentPid', String(process.pid), '-SourceDir', this.readyUpdate.contentDir, '-InstallDir', this.installDir, '-ExecutableName', path.basename(this.executablePath)];
     const child = spawn('powershell.exe', args, { detached: true, windowsHide: true, stdio: 'ignore' }); child.unref();
     this.status({ state: 'installing', message: '软件关闭后将完成更新并自动重新打开' }); return true;
