@@ -56,7 +56,10 @@ async function downloadHttps(url, target, redirects = 0) {
       if (response.statusCode !== 200) { response.resume(); reject(new Error(`更新下载失败：HTTP ${response.statusCode}`)); return; }
       const output = fs.createWriteStream(target); response.pipe(output); output.on('finish', () => output.close(resolve)); output.on('error', reject);
     });
-    request.setTimeout(60000, () => request.destroy(new Error('更新下载超时'))); request.on('error', reject);
+    // GitHub release assets can take more than a minute before the next chunk
+    // arrives on slower or proxied connections. This is an inactivity timeout,
+    // not a total-download deadline, so keep it generous for the ~500 MB app.
+    request.setTimeout(10 * 60 * 1000, () => request.destroy(new Error('更新下载长时间无数据，请检查网络后重试'))); request.on('error', reject);
   });
 }
 async function readTextSource(source) { if (isHttps(source)) return new Promise((resolve, reject) => { https.get(source, (response) => { if (response.statusCode !== 200) { response.resume(); reject(new Error(`更新清单读取失败：HTTP ${response.statusCode}`)); return; } let text = ''; response.setEncoding('utf8'); response.on('data', (chunk) => { text += chunk; }); response.on('end', () => resolve(text)); }).on('error', reject); }); return fsp.readFile(localPath(source), 'utf8'); }
