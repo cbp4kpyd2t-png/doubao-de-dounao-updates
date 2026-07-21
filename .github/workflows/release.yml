@@ -1,0 +1,76 @@
+name: Build and publish update
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match package.json version v$version"
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build unpacked Windows application
+        run: npm run pack
+
+      - name: Create verified update package and manifest
+        run: npm run release:update
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $asset = "dist/update/doubao-de-dounao-$version-win-x64.zip"
+          gh release create "v$version" $asset --title "豆包的豆脑 v$version" --generate-notes --latest
+
+      - name: Publish update manifest to main
+        shell: pwsh
+        run: |
+          Copy-Item dist/update/update-manifest.json "$env:RUNNER_TEMP/update-manifest.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          Copy-Item "$env:RUNNER_TEMP/update-manifest.json" update-manifest.json -Force
+          git add update-manifest.json
+          if (git diff --cached --quiet) {
+            Write-Host "Manifest already current."
+          } else {
+            git commit -m "Publish update manifest for ${{ github.ref_name }}"
+            git push origin main
+          }

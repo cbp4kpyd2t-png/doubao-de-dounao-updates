@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-*/
+release/
+.publish-repo/
+*.log
+*.zip
+*.exe
+.DS_Store

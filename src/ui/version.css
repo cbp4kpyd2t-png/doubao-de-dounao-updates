@@ -1,0 +1,18 @@
+.headerBadges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+#appVersion {
+  padding: 9px 17px;
+  border-radius: 999px;
+  background: #1769e0;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(23, 105, 224, 0.22);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
