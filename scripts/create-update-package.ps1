@@ -10,7 +10,12 @@ $zipName = "doubao-de-dounao-$($packageJson.version)-win-x64.zip"
 $zip = Join-Path $output $zipName
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 Compress-Archive -Path (Join-Path $source '*') -DestinationPath $zip -CompressionLevel Optimal
-$hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$stream = [System.IO.File]::OpenRead($zip)
+try {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try { $hash = ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+  finally { $sha256.Dispose() }
+} finally { $stream.Dispose() }
 $releaseBaseUrl = $packageJson.update.releaseBaseUrl.TrimEnd('/')
 $manifest = [ordered]@{
   version = $packageJson.version
