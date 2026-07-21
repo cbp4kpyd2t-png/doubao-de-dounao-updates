@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { UpdateManager, compareVersions, resolvePackageSource, DEFAULT_UPDATE_SOURCE } = require('../src/update-manager');
+const { UpdateManager, compareVersions, resolvePackageSource, createUpdateWorkDir, readyUpdateIsUsable, DEFAULT_UPDATE_SOURCE } = require('../src/update-manager');
 
 test('更新器只接受更高语义版本', () => { assert.equal(compareVersions('1.1.0', '1.0.9'), 1); assert.equal(compareVersions('1.0.0', '1.0.0'), 0); assert.equal(compareVersions('0.9.9', '1.0.0'), -1); });
 test('本地和HTTPS清单均可安全解析相对更新包', () => {
@@ -34,4 +34,24 @@ test('公开更新仓库地址与发布包地址配置一致', () => {
   const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.equal(pkg.update.manifestUrl, DEFAULT_UPDATE_SOURCE);
   assert.match(pkg.update.releaseBaseUrl, /^https:\/\/github\.com\/cbp4kpyd2t-png\/doubao-de-dounao-updates\/releases\/download$/);
+});
+test('每次检查使用唯一暂存目录，旧目录被占用时不会阻塞新下载', () => {
+  const first = createUpdateWorkDir('C:\\temp\\app', '1.3.1');
+  const second = createUpdateWorkDir('C:\\temp\\app', '1.3.1');
+  assert.notEqual(first, second);
+  assert.equal(path.dirname(first), path.join('C:\\temp\\app', 'updates'));
+  assert.match(path.basename(first), /^1\.3\.1-\d+-[a-f0-9]{8}$/);
+});
+test('同一版本已校验完成时重复检查直接复用，不删除暂存文件', async () => {
+  const fs = require('node:fs'); const fsp = fs.promises; const os = require('node:os');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'update-ready-cache-'));
+  const installDir = path.join(dir, 'installed'); const stagedDir = path.join(dir, 'updates', '1.3.1-verified', 'staged'); const executablePath = path.join(installDir, 'app.exe');
+  await fsp.mkdir(stagedDir, { recursive: true }); await fsp.writeFile(path.join(stagedDir, 'app.exe'), 'ok');
+  const manifestFile = path.join(dir, 'update-manifest.json');
+  await fsp.writeFile(manifestFile, JSON.stringify({ version: '1.3.1', package: 'missing.zip', sha256: 'a'.repeat(64) }), 'utf8');
+  const manager = new UpdateManager({ userDataDir: dir, currentVersion: '1.3.0', installDir, executablePath, packaged: true });
+  manager.readyUpdate = { version: '1.3.1', contentDir: stagedDir, notes: 'ready' };
+  assert.equal(readyUpdateIsUsable(manager.readyUpdate, executablePath), true);
+  const result = await manager.check(manifestFile);
+  assert.equal(result.state, 'ready'); assert.equal(result.version, '1.3.1'); assert.equal(fs.existsSync(path.join(stagedDir, 'app.exe')), true);
 });

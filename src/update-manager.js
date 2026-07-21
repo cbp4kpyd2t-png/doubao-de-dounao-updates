@@ -11,6 +11,35 @@ const DEFAULT_UPDATE_SOURCE = 'https://raw.githubusercontent.com/cbp4kpyd2t-png/
 function versionParts(value) { return String(value || '0').replace(/^v/i, '').split('.').map((part) => Number.parseInt(part, 10) || 0).slice(0, 3); }
 function compareVersions(left, right) { const a = versionParts(left); const b = versionParts(right); for (let i = 0; i < 3; i += 1) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0) ? 1 : -1; } return 0; }
 function sha256File(file) { return new Promise((resolve, reject) => { const hash = crypto.createHash('sha256'); const stream = fs.createReadStream(file); stream.on('error', reject); stream.on('data', (chunk) => hash.update(chunk)); stream.on('end', () => resolve(hash.digest('hex'))); }); }
+function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function isTransientFileLock(error) { return ['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error?.code); }
+async function removeWithRetries(target, attempts = 5) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try { await fsp.rm(target, { recursive: true, force: true, maxRetries: 2, retryDelay: 150 }); return true; }
+    catch (error) {
+      if (!isTransientFileLock(error) || attempt === attempts) throw error;
+      await wait(attempt * 300);
+    }
+  }
+  return false;
+}
+function createUpdateWorkDir(userDataDir, version) {
+  const suffix = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  return path.join(userDataDir, 'updates', `${String(version)}-${suffix}`);
+}
+function readyUpdateIsUsable(readyUpdate, executablePath) {
+  return Boolean(readyUpdate?.contentDir && fs.existsSync(path.join(readyUpdate.contentDir, path.basename(executablePath))));
+}
+async function cleanupStaleUpdateDirs(updatesRoot, keepDir) {
+  let entries = [];
+  try { entries = await fsp.readdir(updatesRoot, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidate = path.join(updatesRoot, entry.name);
+    if (path.resolve(candidate) === path.resolve(keepDir)) continue;
+    try { await removeWithRetries(candidate, 2); } catch { /* A scanner or old process may still hold it; a future check retries. */ }
+  }
+}
 function isHttps(value) { return /^https:\/\//i.test(String(value || '')); }
 function localPath(value) { return /^file:\/\//i.test(String(value || '')) ? fileURLToPath(value) : path.resolve(String(value || '')); }
 function resolvePackageSource(manifestSource, packageValue) {
@@ -60,16 +89,23 @@ class UpdateManager {
     const manifest = JSON.parse((await readTextSource(source)).replace(/^\uFEFF/, ''));
     if (!manifest.version || !manifest.package || !/^[a-f0-9]{64}$/i.test(manifest.sha256 || '')) throw new Error('更新清单缺少version、package或有效sha256');
     if (compareVersions(manifest.version, this.currentVersion) <= 0) return this.status({ state: 'current', message: `当前已是最新版本 ${this.currentVersion}`, currentVersion: this.currentVersion });
-    const packageSource = resolvePackageSource(source, manifest.package); const updateDir = path.join(this.userDataDir, 'updates', String(manifest.version)); const zipFile = path.join(updateDir, 'package.zip');
-    await fsp.rm(updateDir, { recursive: true, force: true }); await fsp.mkdir(updateDir, { recursive: true });
+    if (this.readyUpdate?.version === manifest.version && readyUpdateIsUsable(this.readyUpdate, this.executablePath)) {
+      return this.status({ state: 'ready', message: `版本 ${manifest.version} 已通过校验，可安全安装`, version: manifest.version, notes: this.readyUpdate.notes || manifest.notes || '' });
+    }
+    const packageSource = resolvePackageSource(source, manifest.package);
+    const updatesRoot = path.join(this.userDataDir, 'updates');
+    const updateDir = createUpdateWorkDir(this.userDataDir, manifest.version);
+    const zipFile = path.join(updateDir, 'package.zip');
+    await fsp.mkdir(updateDir, { recursive: true });
     this.status({ state: 'downloading', message: `正在下载 ${manifest.version}…`, version: manifest.version });
     if (isHttps(packageSource)) await downloadHttps(packageSource, zipFile); else await fsp.copyFile(localPath(packageSource), zipFile);
-    const actualHash = await sha256File(zipFile); if (actualHash.toLowerCase() !== manifest.sha256.toLowerCase()) { await fsp.rm(updateDir, { recursive: true, force: true }); throw new Error('更新包SHA256校验失败，已拒绝安装'); }
+    const actualHash = await sha256File(zipFile); if (actualHash.toLowerCase() !== manifest.sha256.toLowerCase()) { try { await removeWithRetries(updateDir); } catch {} throw new Error('更新包SHA256校验失败，已拒绝安装'); }
     const stagedDir = path.join(updateDir, 'staged'); await runPowerShell(['-Command', `Expand-Archive -LiteralPath '${zipFile.replace(/'/g, "''")}' -DestinationPath '${stagedDir.replace(/'/g, "''")}' -Force`]);
     const entries = await fsp.readdir(stagedDir, { withFileTypes: true }); let contentDir = stagedDir;
     if (entries.length === 1 && entries[0].isDirectory()) contentDir = path.join(stagedDir, entries[0].name);
     const exeName = path.basename(this.executablePath); if (!fs.existsSync(path.join(contentDir, exeName))) throw new Error(`更新包无效：未找到 ${exeName}`);
     this.readyUpdate = { version: manifest.version, notes: manifest.notes || '', contentDir, sha256: actualHash };
+    cleanupStaleUpdateDirs(updatesRoot, updateDir).catch(() => {});
     return this.status({ state: 'ready', message: `版本 ${manifest.version} 已通过校验，可安全安装`, version: manifest.version, notes: manifest.notes || '' });
   }
   async install() {
@@ -81,4 +117,4 @@ class UpdateManager {
   }
 }
 
-module.exports = { UpdateManager, compareVersions, resolvePackageSource, sha256File, DEFAULT_UPDATE_SOURCE };
+module.exports = { UpdateManager, compareVersions, resolvePackageSource, sha256File, removeWithRetries, createUpdateWorkDir, readyUpdateIsUsable, DEFAULT_UPDATE_SOURCE };

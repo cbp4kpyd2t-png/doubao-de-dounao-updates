@@ -1,6 +1,6 @@
 {
   "name": "ecommerce-main-image-generator",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "豆包的豆脑：通过 Microsoft Edge 和 ChatGPT 批量生成电商主图",
   "main": "src/main.js",
   "author": "Codex",
@@ -28,9 +28,27 @@
     "appId": "com.codex.ecommerceimagegenerator",
     "productName": "豆包的豆脑",
     "asar": true,
-    "asarUnpack": ["src/native-edge.ps1", "src/process-guard.ps1", "src/update-helper.ps1"],
-    "files": ["src/**/*", "package.json", "README.md"],
-    "win": {"target": "nsis", "artifactName": "豆包的豆脑-${version}-安装包.${ext}"},
-    "nsis": {"oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true, "shortcutName": "豆包的豆脑", "include": "build/installer.nsh"}
+    "asarUnpack": [
+      "src/native-edge.ps1",
+      "src/process-guard.ps1",
+      "src/update-helper.ps1"
+    ],
+    "files": [
+      "src/**/*",
+      "package.json",
+      "README.md"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "豆包的豆脑-${version}-安装包.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "豆包的豆脑",
+      "include": "build/installer.nsh"
+    }
   }
 }
