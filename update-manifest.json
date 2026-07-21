@@ -1,7 +1,7 @@
 {
-  "version": "1.2.0",
-  "package": "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.2.0/doubao-de-dounao-1.2.0-win-x64.zip",
-  "sha256": "fa0c5f0bbe38f3e22a5285231e7109ac12404311cdaefbddc33a67ddc590c400",
+  "version": "1.3.0",
+  "package": "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.3.0/doubao-de-dounao-1.3.0-win-x64.zip",
+  "sha256": "15ab193360833567835f00b2b2552c118a89d3bae878894b7fa0df2ff40f5a3c",
   "notes": "Adaptive scheduling, workflow recovery, image quality checks and safe updates.",
-  "publishedAt": "2026-07-20T18:36:19.0628200Z"
+  "publishedAt": "2026-07-21T16:07:38.1303118Z"
 }
