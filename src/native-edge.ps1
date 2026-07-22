@@ -254,7 +254,15 @@ if($Action -eq 'restart-edge-chatgpt'){
   )
   $edge=$candidates|Where-Object{$_ -and (Test-Path -LiteralPath $_)}|Select-Object -First 1
   if(-not $edge){throw 'Microsoft Edge executable was not found'}
-  Start-Process -FilePath $edge -ArgumentList @('--new-window','https://chatgpt.com/') -WindowStyle Normal
+  $edgeArgs=@('--disable-quic','--new-window','https://chatgpt.com/')
+  try {
+    $internet=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+    $proxy=[string]$internet.ProxyServer
+    if([int]$internet.ProxyEnable -eq 1 -and $proxy -match '^[^;=]+:\d+$'){
+      $edgeArgs=@('--disable-quic',"--proxy-server=http://$proxy",'--new-window','https://chatgpt.com/')
+    }
+  } catch {}
+  Start-Process -FilePath $edge -ArgumentList $edgeArgs -WindowStyle Normal
   $window=$null;for($i=0;$i -lt 60;$i++){$window=EdgeProcess -IgnorePreferred;if($window){break};Start-Sleep -Milliseconds 500}
   if(-not $window){throw 'Microsoft Edge did not open a visible window after restart'}
   Start-Sleep -Seconds 3
@@ -264,7 +272,7 @@ if($Action -eq 'restart-edge-chatgpt'){
 }
 if($Action -eq 'inspect'){
   $p=EdgeProcess; if(-not $p){Result @{found=$false}}
-  $root=Root; $names=@(); $composer=$false; $login=$false; $security=$false; $rateLimit=$false; $stop=$false; $downloads=0; $generatedCount=0; $attachmentCount=0; $submitEnabled=$false; $editCandidates=@(); $buttonCandidates=@()
+  $root=Root; $names=@(); $composer=$false; $login=$false; $security=$false; $rateLimit=$false; $uploadNetworkError=$false; $stop=$false; $downloads=0; $generatedCount=0; $attachmentCount=0; $submitEnabled=$false; $editCandidates=@(); $buttonCandidates=@()
   foreach($el in (All $root)){
     $n=$el.Current.Name;$help=$el.Current.HelpText;$candidateText=("$n $help").Trim(); if(-not $candidateText){continue};
     if($el.Current.ControlType.ProgrammaticName -match 'Edit|Document'){$editCandidates+=@{name=$n;type=$el.Current.ControlType.ProgrammaticName;automationId=$el.Current.AutomationId}}
@@ -273,13 +281,14 @@ if($Action -eq 'inspect'){
     if($n -match "^Log in$|^Login$|^$loginWord$"){$login=$true}
     if($n -match 'captcha|Security check|Unusual activity'){$security=$true}
     if($candidateText -match "$tooFrequentWord|$tooManyWord|$operationFrequentWord|$laterRetryWord|$temporaryLimitWord.*($accessWord|access|visit)|Too many requests|requests? too frequent|rate.?limit|request limit|try again in (a few|several) minutes|temporarily.*limit"){$rateLimit=$true}
+    if($candidateText -match 'files\.oaiusercontent\.com' -and $candidateText -match 'failed|failure|unable|失败|无法'){$uploadNetworkError=$true}
     if($n -match "Stop generating|Stop streaming|^$stopWord"){$stop=$true}
     if($n -match "^Download|^$downloadWord"){$downloads++}
     if($n -match "generated image|^$generatedImagePrefix" -and $el.Current.ControlType.ProgrammaticName -match 'Button|Image'){$generatedCount++}
     if($n -match "Remove file|^$removeFile" -and $el.Current.ControlType.ProgrammaticName -match 'Button'){$attachmentCount++}
     if($el.Current.AutomationId -eq 'composer-submit-button'){$submitEnabled=$el.Current.IsEnabled}
   }
-  Result @{found=$true;title=$p.MainWindowTitle;windowHandle=[int64]$p.MainWindowHandle;hasComposer=$composer;hasLogin=$login;hasSecurity=$security;hasRateLimit=$rateLimit;hasStop=$stop;downloadCount=$downloads;generatedCount=$generatedCount;attachmentCount=$attachmentCount;submitEnabled=$submitEnabled;editCandidates=$editCandidates;buttonCandidates=$buttonCandidates}
+  Result @{found=$true;title=$p.MainWindowTitle;windowHandle=[int64]$p.MainWindowHandle;hasComposer=$composer;hasLogin=$login;hasSecurity=$security;hasRateLimit=$rateLimit;hasUploadNetworkError=$uploadNetworkError;hasStop=$stop;downloadCount=$downloads;generatedCount=$generatedCount;attachmentCount=$attachmentCount;submitEnabled=$submitEnabled;editCandidates=$editCandidates;buttonCandidates=$buttonCandidates}
 }
 FocusEdge|Out-Null; $root=Root
 if($Action -eq 'get-current-chat-url'){

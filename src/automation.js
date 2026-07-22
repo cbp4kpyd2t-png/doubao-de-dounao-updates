@@ -44,13 +44,14 @@ class ChatGPTAutomation {
     const state = await runNative('inspect');
     if (!state.found) throw new Error('当前 Edge 中未找到 ChatGPT 页面');
     if (state.hasRateLimit) throw new Error('__RATE_LIMITED__:ChatGPT提示请求过于频繁');
+    if (state.hasUploadNetworkError) throw new Error('__UPLOAD_NETWORK_ERROR__:附件上传域名无法连接');
     if (state.hasSecurity) throw new Error('检测到验证码或安全检查，请手动处理后继续');
     if (state.hasLogin) throw new Error('ChatGPT页面明确显示登录入口，账号可能已退出登录，需要正常人工处理');
     if (!state.hasComposer) throw new Error('__CHATGPT_PAGE_NOT_READY__:ChatGPT输入框尚未加载，按页面故障自动恢复');
   }
   async inspectWatchState() {
     const state = await runNative('inspect');
-    return { found: state.found, title: state.title, hasComposer: state.hasComposer, hasSecurity: state.hasSecurity, hasRateLimit: !!state.hasRateLimit, hasStop: state.hasStop, downloadCount: state.downloadCount || 0, generatedCount: state.generatedCount || 0, attachmentCount: state.attachmentCount || 0, submitEnabled: !!state.submitEnabled };
+    return { found: state.found, title: state.title, hasComposer: state.hasComposer, hasSecurity: state.hasSecurity, hasRateLimit: !!state.hasRateLimit, hasUploadNetworkError: !!state.hasUploadNetworkError, hasStop: state.hasStop, downloadCount: state.downloadCount || 0, generatedCount: state.generatedCount || 0, attachmentCount: state.attachmentCount || 0, submitEnabled: !!state.submitEnabled };
   }
   async getCurrentChatUrl() { const result = await runNative('get-current-chat-url'); return result.isChat ? result.url : null; }
   async waitForStableCurrentChatUrl(timeoutMs = 30000) {
@@ -122,6 +123,8 @@ class ChatGPTAutomation {
           this.expectedAttachments = files.length; await sleep(250); return;
         } catch (error) {
           lastError = error; this.log(`参考图上传未完整（第 ${attempt}/3 次）：${error.message}`);
+          const uploadState = await runNative('inspect').catch(() => ({}));
+          if (uploadState.hasUploadNetworkError) throw new Error('__UPLOAD_NETWORK_ERROR__:files.oaiusercontent.com 上传失败');
           const cleared = await runNative('clear-attachments', {}, 45000).catch(() => ({ ok: false }));
           if (!cleared.ok) { this.log('无法清除不完整附件，将通过刷新页面恢复'); break; }
           if (attempt < 3) { this.log('已删除全部附件，正在重新上传所有参考图'); await sleep(350); }
