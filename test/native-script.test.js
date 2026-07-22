@@ -109,18 +109,9 @@ test('最终保护会关闭全部Edge进程并用系统Edge重新打开ChatGPT',
   assert.match(action, /Stop-Process -Force/);
   assert.match(action, /Microsoft\\Edge\\Application\\msedge\.exe/);
   assert.match(action, /Start-Process -FilePath \$edge/);
-  assert.match(action, /--disable-quic/);
-  assert.match(action, /--proxy-server=http:\/\/\$proxy/);
   assert.match(action, /--new-window/);
   assert.match(action, /https:\/\/chatgpt\.com\//);
   assert.match(action, /hasComposer/);
-});
-
-test('附件上传域名失败会被页面检查识别', () => {
-  const fs = require('node:fs'); const script = fs.readFileSync(require.resolve('../src/native-edge.ps1'), 'utf8');
-  const inspect = script.slice(script.indexOf("if($Action -eq 'inspect')"), script.indexOf('FocusEdge|Out-Null'));
-  assert.match(inspect, /files\\\.oaiusercontent\\\.com/);
-  assert.match(inspect, /hasUploadNetworkError=\$uploadNetworkError/);
 });
 
 test('保存前持续观察缩略图并识别只有一张图片', () => {

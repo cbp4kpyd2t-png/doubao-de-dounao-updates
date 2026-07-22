@@ -56,11 +56,6 @@ class TaskRunner extends EventEmitter {
     throw lastError;
   }
   async recoverToFreshChatPage(reason) {
-    if (String(reason || '').startsWith('__UPLOAD_NETWORK_ERROR__')) {
-      this.log('检测到附件上传域名连接失败，正在以禁用QUIC并固定系统代理的方式重启Edge');
-      await this.browser.restartEdgeAndOpenChatGPT();
-      return true;
-    }
     let lastError = null;
     for (let attempt = 1; attempt <= 3 && !this.stopped; attempt += 1) {
       try {
@@ -81,7 +76,6 @@ class TaskRunner extends EventEmitter {
     return false;
   }
   isRateLimited(error) { return String(error?.message || error || '').startsWith('__RATE_LIMITED__'); }
-  isUploadNetworkError(error) { return String(error?.message || error || '').startsWith('__UPLOAD_NETWORK_ERROR__'); }
   async cooldownForRateLimit(reason = 'ChatGPT请求过于频繁') {
     if (this.rateLimitCooling) { while (this.rateLimitCooling && !this.stopped) await sleep(1000); return; }
     this.rateLimitCooling = true;
@@ -349,7 +343,6 @@ class TaskRunner extends EventEmitter {
   resetWatchdogSamples() { this.watchLastSignature = null; this.watchSameCount = 0; }
   observeWatchState(state) {
     if (state?.hasRateLimit) { this.resetWatchdogSamples(); return 'rate-limit'; }
-    if (state?.hasUploadNetworkError) { this.resetWatchdogSamples(); return 'upload-network'; }
     if (this.state && isWorkflowOverdue(this.state)) { this.resetWatchdogSamples(); return 'step-timeout'; }
     if (!state?.found || state.hasStop) { this.resetWatchdogSamples(); return false; }
     const signature = JSON.stringify({ phase: this.currentPhase, title: state.title, hasComposer: state.hasComposer, hasSecurity: state.hasSecurity, downloadCount: state.downloadCount, generatedCount: state.generatedCount, attachmentCount: state.attachmentCount, submitEnabled: state.submitEnabled });
@@ -395,7 +388,6 @@ class TaskRunner extends EventEmitter {
           const step = this.state?.workflow?.current;
           this.log(`${decision === 'step-timeout' ? '步骤超过明确时限' : '界面连续无变化'}，已请求当前操作安全退出；步骤：${step?.name || this.currentPhase}；恢复动作：${step?.recovery || '刷新并打开新对话'}`);
         } else if (decision === 'recover-page') { this.workflowRecoveryRequested = true; this.log(`界面监控请求页面恢复，等待当前安全步骤退出：${this.currentPhase}`); }
-        else if (decision === 'upload-network') { this.workflowRecoveryRequested = true; this.log('检测到附件上传网络失败，等待当前步骤退出后将以禁用QUIC并固定系统代理的方式重启Edge'); }
         else if (decision === 'rate-limit') { await this.cooldownForRateLimit('界面监控检测到请求过于频繁'); this.rateLimitRestartRequested = true; this.workflowRecoveryRequested = true; this.log('限流冷却已经结束，已通知当前轮次退出原等待阶段并从新对话继续'); }
       } catch (error) { this.log(`界面监控暂时无法读取：${error.message}`); }
       finally { this.watchInFlight = false; }
@@ -518,7 +510,7 @@ class TaskRunner extends EventEmitter {
           this.emitStatus({ product: product.name, productIndex: p + 1, productTotal: products.length, round: nextRound, completed: ps.completed, phase: '新对话中' });
           await this.runStep('打开新对话', () => browser.newChat(), { maxAttempts: 3, onRetry: () => browser.recoverToFreshChatPage() });
           this.emitStatus({ product: product.name, productIndex: p + 1, productTotal: products.length, round: nextRound, completed: ps.completed, phase: '上传中' });
-          await this.runStep('上传参考图', ({ deadlineAt }) => browser.uploadReferences(latestProduct.images, () => this.stopped ? '__STOPPED__' : (this.workflowRecoveryRequested || Date.now() >= deadlineAt ? '__WORKFLOW_RECOVERY__' : false), { deadlineAt, maxRefreshCycles: 2 }), { maxAttempts: 2, onRetry: (error) => this.isUploadNetworkError(error) ? browser.restartEdgeAndOpenChatGPT() : browser.recoverToFreshChatPage() });
+          await this.runStep('上传参考图', ({ deadlineAt }) => browser.uploadReferences(latestProduct.images, () => this.stopped ? '__STOPPED__' : (this.workflowRecoveryRequested || Date.now() >= deadlineAt ? '__WORKFLOW_RECOVERY__' : false), { deadlineAt, maxRefreshCycles: 2 }), { maxAttempts: 2, onRetry: () => browser.recoverToFreshChatPage() });
           const adaptiveGenerationSeconds = this.ensureScheduler().generationTimeoutSeconds(this.state.generationTimeoutSeconds); this.state.activeGenerationTimeoutSeconds = adaptiveGenerationSeconds;
           if (adaptiveGenerationSeconds !== this.state.generationTimeoutSeconds) this.log(`自适应调度根据近期生成速度把本对话等待时间调整为${adaptiveGenerationSeconds}秒（用户上限${this.state.generationTimeoutSeconds}秒）`);
           this.recoveryContext.generationStartedAt = Date.now();
