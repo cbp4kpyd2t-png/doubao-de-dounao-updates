@@ -203,16 +203,28 @@ function SubmitSavePath($targetBase){
   $desktop=[Windows.Automation.AutomationElement]::RootElement; $dialog=$null
   for($i=0;$i -lt 20;$i++){ $dialog=FindByName $desktop "Save As|^$saveAsWord$" 'Window'; if($dialog){break}; Start-Sleep -Milliseconds 250 }
   if(-not $dialog){throw 'Save As dialog was not found'}
-  $targetDir=[IO.Path]::GetDirectoryName($targetBase); $targetName=[IO.Path]::GetFileName($targetBase)
-  try{$dialog.SetFocus()}catch{[NativeWindow]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle)|Out-Null}; Start-Sleep -Milliseconds 200; [Windows.Forms.SendKeys]::SendWait('^l'); Start-Sleep -Milliseconds 200; SetClipboardText $targetDir; [Windows.Forms.SendKeys]::SendWait('^a'); [Windows.Forms.SendKeys]::SendWait('^v'); [Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 1
+  $targetDir=[IO.Path]::GetDirectoryName($targetBase)
+  if(-not (Test-Path -LiteralPath $targetDir -PathType Container)){throw "Save target directory does not exist: $targetDir"}
+  try{$dialog.SetFocus()}catch{[NativeWindow]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle)|Out-Null}; Start-Sleep -Milliseconds 300
   $fileName=FindNativeControl $dialog '1001' '^Edit$'
   if(-not $fileName){$fileName=FindVisibleByAutomationId $dialog '1148'}
   if(-not $fileName){throw 'Save As file name field was not found'}
   try{$fileName.SetFocus()}catch{ClickElement $fileName|Out-Null};Start-Sleep -Milliseconds 200
-  try{$value=$fileName.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern);$value.SetValue($targetName)}catch{SetClipboardText $targetName;[Windows.Forms.SendKeys]::SendWait('^a');[Windows.Forms.SendKeys]::SendWait('^v')};Start-Sleep -Milliseconds 250
+  try{$value=$fileName.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern);$value.SetValue($targetBase)}catch{SetClipboardText $targetBase;[Windows.Forms.SendKeys]::SendWait('^a');[Windows.Forms.SendKeys]::SendWait('^v')};Start-Sleep -Milliseconds 350
   $save=FindNativeControl $dialog '1' '^Button$'
-  if(-not $save){throw 'Save As save button was not found'}
-  ClickElement $save|Out-Null;Start-Sleep -Milliseconds 500
+  if(-not $save){$save=FindByName $dialog "^Save$|^$saveWord$" 'Button'}
+  if(-not $save){throw "Save As save button was not found for target: $targetBase"}
+  $dialogClosed=$false
+  for($attempt=1;$attempt -le 3 -and -not $dialogClosed;$attempt++){
+    if($attempt -eq 1){InvokeElement $save|Out-Null}
+    elseif($attempt -eq 2){try{$fileName.SetFocus()}catch{};Start-Sleep -Milliseconds 150;[Windows.Forms.SendKeys]::SendWait('{ENTER}')}
+    else{ClickElement $save|Out-Null}
+    for($check=0;$check -lt 12;$check++){
+      Start-Sleep -Milliseconds 250
+      try{$null=$dialog.Current.Name}catch{$dialogClosed=$true;break}
+    }
+  }
+  if(-not $dialogClosed){throw "Save As dialog remained open after Invoke, Enter and mouse click for target: $targetBase"}
 }
 
 $loginWord=([char]0x767b)+([char]0x5f55)

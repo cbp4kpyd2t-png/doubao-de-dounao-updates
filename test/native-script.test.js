@@ -12,13 +12,20 @@ test('原生脚本使用UTF-8输出中文文件路径', () => {
 
 test('另存为流程使用窗口控件而非Alt+N快捷键', () => {
   assert.match(script, /function SubmitSavePath/);
+  const submitSave = script.slice(script.indexOf('function SubmitSavePath'), script.indexOf('$loginWord='));
   assert.match(script, /Save As file name field was not found/);
   const saveAction = script.slice(script.indexOf("if($Action -eq 'save-viewer-images')"));
   assert.doesNotMatch(saveAction, /SendWait\('%n'\)/);
   assert.match(script, /FindNativeControl \$dialog '1001' '\^Edit\$'/);
-  assert.match(script, /SendWait\('\^l'\)/);
+  assert.doesNotMatch(submitSave, /SendWait\('\^l'\)/);
   assert.match(script, /GetDirectoryName\(\$targetBase\)/);
+  assert.match(submitSave, /Test-Path -LiteralPath \$targetDir -PathType Container/);
+  assert.match(submitSave, /SetValue\(\$targetBase\)/);
   assert.match(script, /FindNativeControl \$dialog '1' '\^Button\$'/);
+  assert.match(submitSave, /InvokeElement \$save/);
+  assert.match(submitSave, /SendWait\('\{ENTER\}'\)/);
+  assert.match(submitSave, /ClickElement \$save/);
+  assert.match(submitSave, /Save As dialog remained open after Invoke, Enter and mouse click/);
   assert.match(script, /function FindExactNameInProcess/);
   assert.match(saveAction, /FindExactNameInProcess \$desktop \$saveNames 'msedge'/);
   assert.match(script, /\$owner\.ProcessName -eq \$processName/);
