@@ -25,7 +25,11 @@ test('另存为流程使用窗口控件而非Alt+N快捷键', () => {
   assert.match(submitSave, /InvokeElement \$save/);
   assert.match(submitSave, /SendWait\('\{ENTER\}'\)/);
   assert.match(submitSave, /ClickElement \$save/);
-  assert.match(submitSave, /Save As dialog remained open after Invoke, Enter and mouse click/);
+  assert.match(submitSave, /Save As dialog remained open and no saved file appeared/);
+  assert.match(script, /function FindSavedTargetFile/);
+  assert.match(script, /function FindVisibleSaveDialog/);
+  assert.match(submitSave, /FindSavedTargetFile \$targetBase/);
+  assert.match(submitSave, /if\(-not \(FindVisibleSaveDialog\)\)/);
   assert.match(script, /function FindExactNameInProcess/);
   assert.match(saveAction, /FindExactNameInProcess \$desktop \$saveNames 'msedge'/);
   assert.match(script, /\$owner\.ProcessName -eq \$processName/);
@@ -62,12 +66,25 @@ test('查看器兼容五缩略图和当前大图加四缩略图两种布局', ()
   assert.match(saveAction, /Main image did not change after selecting thumbnail/);
   assert.match(script, /function GetImageRegionFingerprint/);
   assert.match(script, /CopyFromScreen/);
+  assert.match(script, /function GetImageFingerprintDistance/);
+  assert.match(script, /\$r\.Width\*0\.60/);
+  assert.match(script, /\$distance -ge 4\.0/);
   assert.match(saveAction, /\$menuAttempt=0;\$menuAttempt -lt 3/);
   assert.match(saveAction, /FindExactNameNearPoint/);
   assert.match(saveAction, /after 3 attempts/);
   assert.doesNotMatch(saveAction, /if\(-not \$savedFile\).*SendWait\('\{ESC\}'\)/);
   assert.match(saveAction, /WaitForViewerAfterSave 0/);
   assert.match(saveAction, /Image viewer closed after saving thumbnail/);
+  assert.match(script, /function DownloadsFlyoutIsOpen/);
+  assert.match(script, /function CloseDownloadsFlyoutIfOpen/);
+  assert.match(script, /function ThumbnailPointIsClear/);
+  assert.match(script, /AutomationElement\]::FromPoint/);
+  assert.match(script, /function EnsureThumbnailPointIsClear/);
+  assert.match(script, /if\(-not \(EnsureThumbnailPointIsClear \$thumb\.element\)\)\{continue\}/);
+  assert.match(script, /\^Open file\$\|\^Show in folder\$/);
+  assert.match(script, /AddSeconds\(4\)/);
+  assert.match(script, /\$edgePids -contains \$el\.Current\.ProcessId/);
+  assert.match(saveAction, /CloseDownloadsFlyoutIfOpen/);
   assert.match(script, /index=\$slot;file=\$savedFile/);
   assert.match(saveAction, /while\(\$true\).*if\(-not \$existing\.Count\)\{break\};\$number\+\+/s);
   assert.doesNotMatch(saveAction, /if\(\$existing\.Count\)\{\$saved\+=/);
@@ -98,6 +115,8 @@ test('被无视的对话可按记录网址重新打开检查', () => {
   assert.match(script, /\(\?:\[\^\?#\]\*\/\)\?c\//);
   assert.match(script, /Action -eq 'open-chat-url'/);
   assert.match(script, /Only recorded ChatGPT conversation URLs can be opened/);
+  assert.match(script, /Action -eq 'open-sidebar-chat'/);
+  assert.match(script, /Sidebar chat did not load/);
 });
 
 test('无图片生成时可刷新页面并等待输入框恢复', () => {
@@ -177,7 +196,8 @@ test('页面检查可识别中英文请求频繁提示并返回限流状态', ()
 test('整个任务固定使用首次绑定的Edge窗口句柄', () => {
   assert.match(script, /edgeWindowHandle/);
   assert.match(script, /\[int64\]\$_.MainWindowHandle -eq \$preferred/);
-  assert.match(script, /windowHandle=\[int64\]\$p\.MainWindowHandle/);
+  assert.match(script, /\$visible\.Count -eq 1/);
+  assert.match(script, /windowHandle=\[int64\]\$root\.Current\.NativeWindowHandle/);
   assert.match(script, /EdgeProcess -IgnorePreferred/);
 });
 

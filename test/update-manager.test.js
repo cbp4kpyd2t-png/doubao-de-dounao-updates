@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { UpdateManager, compareVersions, resolvePackageSource, createUpdateWorkDir, readyUpdateIsUsable, DEFAULT_UPDATE_SOURCE } = require('../src/update-manager');
+const { UpdateManager, compareVersions, resolvePackageSource, createUpdateWorkDir, readyUpdateIsUsable, normalizeProxyUrl, DEFAULT_UPDATE_SOURCE } = require('../src/update-manager');
 
 test('更新器只接受更高语义版本', () => { assert.equal(compareVersions('1.1.0', '1.0.9'), 1); assert.equal(compareVersions('1.0.0', '1.0.0'), 0); assert.equal(compareVersions('0.9.9', '1.0.0'), -1); });
 test('本地和HTTPS清单均可安全解析相对更新包', () => {
@@ -44,6 +44,14 @@ test('下载器提供进度、90秒停滞检测和有限重试', () => {
   assert.match(source, /response\.setTimeout\(90 \* 1000/);
   assert.match(source, /attempts: 3/);
   assert.match(source, /state: 'verifying'/); assert.match(source, /state: 'extracting'/);
+});
+test('更新下载自动兼容Windows系统代理和分协议代理格式', () => {
+  assert.equal(normalizeProxyUrl('127.0.0.1:10808'), 'http://127.0.0.1:10808');
+  assert.equal(normalizeProxyUrl('http=127.0.0.1:8080;https=127.0.0.1:10808'), 'http://127.0.0.1:10808');
+  assert.equal(normalizeProxyUrl('http://proxy.example:8080'), 'http://proxy.example:8080');
+  const fs = require('node:fs'); const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'update-manager.js'), 'utf8');
+  assert.match(source, /Internet Settings/); assert.match(source, /ProxyEnable/); assert.match(source, /ProxyServer/);
+  assert.match(source, /new HttpsProxyAgent\(proxyUrl\)/); assert.match(source, /https\.get\(url, updateRequestOptions\(\)/);
 });
 test('品牌名称统一改为豆包的豆脑且保留内部数据标识', () => {
   const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')); const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'index.html'), 'utf8'); const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');

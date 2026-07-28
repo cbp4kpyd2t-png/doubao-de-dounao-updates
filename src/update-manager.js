@@ -3,8 +3,9 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const https = require('node:https');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { pathToFileURL, fileURLToPath } = require('node:url');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const DEFAULT_UPDATE_SOURCE = 'https://raw.githubusercontent.com/cbp4kpyd2t-png/doubao-de-dounao-updates/main/update-manifest.json';
 
@@ -41,6 +42,33 @@ async function cleanupStaleUpdateDirs(updatesRoot, keepDir) {
   }
 }
 function isHttps(value) { return /^https:\/\//i.test(String(value || '')); }
+function normalizeProxyUrl(value) {
+  const source = String(value || '').trim();
+  if (!source) return '';
+  const entries = Object.fromEntries(source.split(';').map((part) => part.trim()).filter(Boolean).map((part) => {
+    const split = part.indexOf('='); return split > 0 ? [part.slice(0, split).toLowerCase(), part.slice(split + 1)] : ['default', part];
+  }));
+  const candidate = entries.https || entries.http || entries.default || '';
+  if (!candidate) return '';
+  return /^[a-z]+:\/\//i.test(candidate) ? candidate : `http://${candidate}`;
+}
+function getWindowsProxyUrl() {
+  const environmentProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+  if (environmentProxy) return normalizeProxyUrl(environmentProxy);
+  if (process.platform !== 'win32') return '';
+  try {
+    const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+    const enabled = execFileSync('reg.exe', ['query', key, '/v', 'ProxyEnable'], { encoding: 'utf8', windowsHide: true });
+    if (!/\b0x1\b/i.test(enabled)) return '';
+    const result = execFileSync('reg.exe', ['query', key, '/v', 'ProxyServer'], { encoding: 'utf8', windowsHide: true });
+    const match = result.match(/ProxyServer\s+REG_\w+\s+(.+)\s*$/im);
+    return normalizeProxyUrl(match?.[1] || '');
+  } catch { return ''; }
+}
+function updateRequestOptions() {
+  const proxyUrl = getWindowsProxyUrl();
+  return { headers: { 'User-Agent': 'EcommerceMainImageGenerator-Updater' }, ...(proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {}) };
+}
 function localPath(value) { return /^file:\/\//i.test(String(value || '')) ? fileURLToPath(value) : path.resolve(String(value || '')); }
 function resolvePackageSource(manifestSource, packageValue) {
   if (isHttps(packageValue) || /^file:\/\//i.test(packageValue) || path.isAbsolute(packageValue)) return packageValue;
@@ -51,7 +79,7 @@ async function downloadHttpsOnce(url, target, options = {}, redirects = 0) {
   if (redirects > 5) throw new Error('更新下载重定向次数过多');
   await fsp.mkdir(path.dirname(target), { recursive: true });
   return new Promise((resolve, reject) => {
-    const request = https.get(url, { headers: { 'User-Agent': 'EcommerceMainImageGenerator-Updater' } }, (response) => {
+    const request = https.get(url, updateRequestOptions(), (response) => {
       if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) { response.resume(); const next = new URL(response.headers.location, url); if (next.protocol !== 'https:') { reject(new Error('更新下载拒绝从HTTPS降级到不安全连接')); return; } downloadHttpsOnce(next.href, target, options, redirects + 1).then(resolve, reject); return; }
       if (response.statusCode !== 200) { response.resume(); reject(new Error(`更新下载失败：HTTP ${response.statusCode}`)); return; }
       const total = Number(response.headers['content-length']) || 0;
@@ -105,7 +133,7 @@ async function downloadHttps(url, target, options = {}) {
   }
   throw new Error(`更新下载重试${attempts}次仍失败：${lastError?.message || '未知网络错误'}`);
 }
-async function readTextSource(source) { if (isHttps(source)) return new Promise((resolve, reject) => { https.get(source, (response) => { if (response.statusCode !== 200) { response.resume(); reject(new Error(`更新清单读取失败：HTTP ${response.statusCode}`)); return; } let text = ''; response.setEncoding('utf8'); response.on('data', (chunk) => { text += chunk; }); response.on('end', () => resolve(text)); }).on('error', reject); }); return fsp.readFile(localPath(source), 'utf8'); }
+async function readTextSource(source) { if (isHttps(source)) return new Promise((resolve, reject) => { https.get(source, updateRequestOptions(), (response) => { if (response.statusCode !== 200) { response.resume(); reject(new Error(`更新清单读取失败：HTTP ${response.statusCode}`)); return; } let text = ''; response.setEncoding('utf8'); response.on('data', (chunk) => { text += chunk; }); response.on('end', () => resolve(text)); }).on('error', reject); }); return fsp.readFile(localPath(source), 'utf8'); }
 function runPowerShell(args, timeoutMs = 180000) { return new Promise((resolve, reject) => { const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { windowsHide: true }); let stderr = ''; const timer = setTimeout(() => { child.kill(); reject(new Error('更新解压超时')); }, timeoutMs); child.stderr.on('data', (chunk) => { stderr += chunk; }); child.on('error', reject); child.on('close', (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(stderr.trim() || `更新解压失败：${code}`)); }); }); }
 
 class UpdateManager {
@@ -178,4 +206,4 @@ class UpdateManager {
   }
 }
 
-module.exports = { UpdateManager, compareVersions, resolvePackageSource, sha256File, removeWithRetries, createUpdateWorkDir, readyUpdateIsUsable, DEFAULT_UPDATE_SOURCE };
+module.exports = { UpdateManager, compareVersions, resolvePackageSource, sha256File, removeWithRetries, createUpdateWorkDir, readyUpdateIsUsable, normalizeProxyUrl, getWindowsProxyUrl, DEFAULT_UPDATE_SOURCE };

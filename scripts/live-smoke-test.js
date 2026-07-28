@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
+const { app } = require('electron');
 const { scanProductDirectory } = require('../src/core');
 const { prepareProductCreativeFiles, buildRoundPrompt } = require('../src/creative-engine');
 const { ChatGPTAutomation } = require('../src/automation');
@@ -9,6 +10,7 @@ async function main() {
   const productDir = process.env.PRODUCT_DIR;
   const outputDir = process.env.SMOKE_OUT;
   const fileStem = process.env.FILE_STEM || 'live-smoke';
+  const saveOnly = process.env.SMOKE_SAVE_ONLY === '1';
   if (!productDir || !outputDir) throw new Error('PRODUCT_DIR and SMOKE_OUT are required');
   const product = await scanProductDirectory(productDir, path.basename(productDir));
   if (!product.valid) throw new Error('The selected smoke-test product is invalid');
@@ -21,14 +23,16 @@ async function main() {
   try {
     await browser.launch();
     console.log('CONNECTED');
-    await browser.newChat();
-    console.log('NEW_CHAT');
-    await browser.uploadReferences(product.images, () => false, { maxRefreshCycles: 2 });
-    console.log('UPLOAD_OK', product.images.length);
-    await browser.sendPrompt(prompt, 200);
-    console.log('PROMPT_SENT');
-    const result = await browser.waitForGeneration(() => false);
-    console.log('GENERATION', JSON.stringify(result));
+    if (!saveOnly) {
+      await browser.newChat();
+      console.log('NEW_CHAT');
+      await browser.uploadReferences(product.images, () => false, { maxRefreshCycles: 2 });
+      console.log('UPLOAD_OK', product.images.length);
+      await browser.sendPrompt(prompt, 200);
+      console.log('PROMPT_SENT');
+      const result = await browser.waitForGeneration(() => false);
+      console.log('GENERATION', JSON.stringify(result));
+    } else console.log('SAVE_ONLY_REUSING_CURRENT_CHAT');
     const viewer = await browser.getViewerImageCount({ targetTotal: 5, maxWaitSeconds: 60 });
     console.log('VIEWER', JSON.stringify(viewer));
     if (!viewer.found || viewer.total < 5) throw new Error(`Incomplete five-image result: ${viewer.total || 0}`);
@@ -41,7 +45,10 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+app.whenReady().then(main).then(() => {
+  app.quit();
+}).catch((error) => {
   console.error('SMOKE_FAILED', error.stack || error);
   process.exitCode = 1;
+  app.quit();
 });

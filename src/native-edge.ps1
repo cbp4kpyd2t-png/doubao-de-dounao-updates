@@ -13,6 +13,7 @@ using System.Runtime.InteropServices;
 public static class NativeWindow {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
 }
@@ -20,24 +21,35 @@ public static class NativeWindow {
 
 function Result($data){ $data | ConvertTo-Json -Compress -Depth 6; exit 0 }
 function Payload(){ $json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($PayloadBase64)); return $json|ConvertFrom-Json }
+function PreferredWindowHandle(){
+  $preferred=0;try{$preferred=[int64]$script:payload.edgeWindowHandle}catch{}
+  if($preferred -gt 0 -and [NativeWindow]::IsWindow([IntPtr]$preferred)){return $preferred}
+  return 0
+}
 function EdgeProcess([switch]$IgnorePreferred){
   if(-not $IgnorePreferred){
     $preferred=0;try{$preferred=[int64]$script:payload.edgeWindowHandle}catch{}
     if($preferred -gt 0){
-      $bound=Get-Process msedge -ErrorAction SilentlyContinue | Where-Object {[int64]$_.MainWindowHandle -eq $preferred -and $_.MainWindowTitle -match 'Microsoft.*Edge'} | Select-Object -First 1
+      $bound=Get-Process msedge -ErrorAction SilentlyContinue | Where-Object {[int64]$_.MainWindowHandle -eq $preferred} | Select-Object -First 1
       if($bound){return $bound}
+      # Edge can replace its top-level handle while a download flyout closes.
+      # Rebind only when there is exactly one visible Edge process, so we never
+      # guess between multiple user windows.
+      $visible=@(Get-Process msedge -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0})
+      if($visible.Count -eq 1){return $visible[0]}
       return $null
     }
   }
-  $items=Get-Process msedge -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match 'Microsoft.*Edge'}
-  return $items|Select-Object -First 1
+  $items=@(Get-Process msedge -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0})
+  if($items.Count -eq 1){return $items[0]}
+  return $items|Where-Object {$_.MainWindowTitle -match 'Microsoft.*Edge'}|Select-Object -First 1
 }
-function Root(){ $p=EdgeProcess; if(-not $p){return $null}; return [Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle) }
+function Root(){ $preferred=PreferredWindowHandle;if($preferred -gt 0){return [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$preferred)};$p=EdgeProcess;if(-not $p){return $null};return [Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle) }
 function All($root){ return $root.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition) }
 function MatchName($name,$pattern){ return $name -and $name -match $pattern }
 function SetClipboardText($text){ for($i=0;$i -lt 10;$i++){try{[Windows.Forms.Clipboard]::SetText($text); return}catch{Start-Sleep -Milliseconds 150}}; throw 'Clipboard is busy' }
 function GetClipboardText(){ for($i=0;$i -lt 10;$i++){try{if([Windows.Forms.Clipboard]::ContainsText()){return [Windows.Forms.Clipboard]::GetText()}}catch{};Start-Sleep -Milliseconds 150}; return $null }
-function FocusEdge(){ $p=EdgeProcess; if(-not $p){throw 'Current ChatGPT Edge window was not found'}; [NativeWindow]::ShowWindow($p.MainWindowHandle,9)|Out-Null; [NativeWindow]::SetForegroundWindow($p.MainWindowHandle)|Out-Null; Start-Sleep -Milliseconds 500; return $p }
+function FocusEdge(){ $preferred=PreferredWindowHandle;if($preferred -gt 0){[NativeWindow]::ShowWindow([IntPtr]$preferred,9)|Out-Null;[NativeWindow]::SetForegroundWindow([IntPtr]$preferred)|Out-Null;Start-Sleep -Milliseconds 500;return @{MainWindowHandle=$preferred}};$p=EdgeProcess;if(-not $p){throw 'Current ChatGPT Edge window was not found'};[NativeWindow]::ShowWindow($p.MainWindowHandle,9)|Out-Null;[NativeWindow]::SetForegroundWindow($p.MainWindowHandle)|Out-Null;Start-Sleep -Milliseconds 500;return $p }
 function InvokeElement($el){
   try{$pattern=$el.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern); $pattern.Invoke(); return $true}catch{}
   try{$rect=$el.Current.BoundingRectangle; $x=[int]($rect.X+$rect.Width/2); $y=[int]($rect.Y+$rect.Height/2); [NativeWindow]::SetCursorPos($x,$y)|Out-Null; [NativeWindow]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero); [NativeWindow]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero); return $true}catch{}
@@ -203,24 +215,31 @@ function GetSelectedThumbnailIndex($thumbs){
 function GetImageRegionFingerprint($main){
   try{
     $r=$main.rect
-    $x=[Math]::Max(0,[int]$r.X);$y=[Math]::Max(0,[int]$r.Y)
-    $width=[Math]::Max(1,[Math]::Min(320,[int]$r.Width));$height=[Math]::Max(1,[Math]::Min(320,[int]$r.Height))
-    $sourceWidth=[Math]::Max(1,[int]$r.Width);$sourceHeight=[Math]::Max(1,[int]$r.Height)
+    # Move the pointer away so hover buttons and fading overlays are not mistaken
+    # for a different generated image.
+    [NativeWindow]::SetCursorPos(2,2)|Out-Null;Start-Sleep -Milliseconds 350
+    $sourceWidth=[Math]::Max(16,[int]($r.Width*0.60));$sourceHeight=[Math]::Max(16,[int]($r.Height*0.60))
+    $x=[Math]::Max(0,[int]($r.X+($r.Width-$sourceWidth)/2));$y=[Math]::Max(0,[int]($r.Y+($r.Height-$sourceHeight)/2))
     $source=New-Object Drawing.Bitmap $sourceWidth,$sourceHeight
     $graphics=[Drawing.Graphics]::FromImage($source)
     $graphics.CopyFromScreen($x,$y,0,0,$source.Size)
     $graphics.Dispose()
-    $sample=New-Object Drawing.Bitmap $width,$height
+    $sample=New-Object Drawing.Bitmap 16,16
     $sampleGraphics=[Drawing.Graphics]::FromImage($sample)
-    $sampleGraphics.DrawImage($source,0,0,$width,$height)
+    $sampleGraphics.DrawImage($source,0,0,16,16)
     $sampleGraphics.Dispose();$source.Dispose()
-    $stream=New-Object IO.MemoryStream
-    $sample.Save($stream,[Drawing.Imaging.ImageFormat]::Png);$sample.Dispose()
-    $sha=[Security.Cryptography.SHA256]::Create()
-    $hash=[BitConverter]::ToString($sha.ComputeHash($stream.ToArray())).Replace('-','').ToLowerInvariant()
-    $sha.Dispose();$stream.Dispose()
-    return $hash
+    $values=@()
+    for($sampleY=0;$sampleY -lt 16;$sampleY++){for($sampleX=0;$sampleX -lt 16;$sampleX++){$pixel=$sample.GetPixel($sampleX,$sampleY);$values+=[int]$pixel.R;$values+=[int]$pixel.G;$values+=[int]$pixel.B}}
+    $sample.Dispose()
+    return ($values -join ',')
   }catch{return $null}
+}
+function GetImageFingerprintDistance($left,$right){
+  if(-not $left -or -not $right){return 999}
+  $a=@($left -split ','|ForEach-Object{[int]$_});$b=@($right -split ','|ForEach-Object{[int]$_})
+  if($a.Count -ne $b.Count -or -not $a.Count){return 999}
+  $sum=0.0;for($i=0;$i -lt $a.Count;$i++){$sum+=[Math]::Abs($a[$i]-$b[$i])}
+  return $sum/$a.Count
 }
 function WaitForViewerAfterSave($minimumThumbs=0){
   FocusEdge|Out-Null
@@ -237,12 +256,72 @@ function WaitForViewerAfterSave($minimumThumbs=0){
   }
   return $best
 }
+function DownloadsFlyoutIsOpen(){
+  $edgeRoot=Root;$edgeProcess=EdgeProcess;if(-not $edgeRoot -or -not $edgeProcess){return $false};$edgeRect=$edgeRoot.Current.BoundingRectangle;$edgePids=@(Get-Process msedge -ErrorAction SilentlyContinue|ForEach-Object{$_.Id})
+  $desktop=[Windows.Automation.AutomationElement]::RootElement
+  foreach($el in (All $desktop)){
+    try{
+      $r=$el.Current.BoundingRectangle;$name=$el.Current.Name
+      if($edgePids -contains $el.Current.ProcessId -and -not $el.Current.IsOffscreen -and $r.Width -gt 0 -and $r.Height -gt 0 -and $r.X -gt ($edgeRect.X+$edgeRect.Width*0.45) -and $name -match '^Open file$|^Show in folder$|^See more$|^打开文件$|^在文件夹中显示$|^查看更多$'){return $true}
+    }catch{}
+  }
+  return $false
+}
+function CloseDownloadsFlyoutIfOpen(){
+  # Edge opens the downloads flyout asynchronously after the file appears.
+  # Poll long enough to catch it instead of checking only once too early.
+  $deadline=[DateTime]::UtcNow.AddSeconds(4);$seen=$false
+  while([DateTime]::UtcNow -lt $deadline){
+    if(DownloadsFlyoutIsOpen){$seen=$true;break}
+    Start-Sleep -Milliseconds 200
+  }
+  if(-not $seen){return $false}
+  FocusEdge|Out-Null;[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 600
+  if(DownloadsFlyoutIsOpen){
+    $edgeRoot=Root;$edgeRect=$edgeRoot.Current.BoundingRectangle;$toggle=$null;$desktop=[Windows.Automation.AutomationElement]::RootElement;$edgePids=@(Get-Process msedge -ErrorAction SilentlyContinue|ForEach-Object{$_.Id})
+    foreach($el in (All $desktop)){
+      try{$r=$el.Current.BoundingRectangle;if($edgePids -contains $el.Current.ProcessId -and -not $el.Current.IsOffscreen -and $el.Current.ControlType.ProgrammaticName -match 'Button' -and $el.Current.Name -match '^Downloads$|^下载$' -and $r.Y -lt ($edgeRect.Y+140) -and $r.X -gt ($edgeRect.X+$edgeRect.Width*0.55)){$toggle=$el;break}}catch{}
+    }
+    if($toggle){ClickElement $toggle|Out-Null;Start-Sleep -Milliseconds 500}
+  }
+  return (-not (DownloadsFlyoutIsOpen))
+}
+function ElementRuntimeKey($el){
+  try{return (($el.GetRuntimeId()|ForEach-Object{[string]$_}) -join '.')}catch{return ''}
+}
+function ThumbnailPointIsClear($thumb){
+  try{
+    $rect=$thumb.Current.BoundingRectangle
+    if($rect.Width -le 0 -or $rect.Height -le 0){return $false}
+    $point=New-Object Windows.Point ([double]($rect.X+$rect.Width/2)),([double]($rect.Y+$rect.Height/2))
+    $hit=[Windows.Automation.AutomationElement]::FromPoint($point)
+    $targetKey=ElementRuntimeKey $thumb
+    if(-not $hit -or -not $targetKey){return $false}
+    $walker=[Windows.Automation.TreeWalker]::ControlViewWalker
+    for($current=$hit;$current;$current=$walker.GetParent($current)){
+      if((ElementRuntimeKey $current) -eq $targetKey){return $true}
+    }
+  }catch{}
+  return $false
+}
+function EnsureThumbnailPointIsClear($thumb){
+  for($attempt=0;$attempt -lt 4;$attempt++){
+    if(ThumbnailPointIsClear $thumb){return $true}
+    # A browser flyout (most commonly Downloads) is covering the thumbnail.
+    # Escape is safe here because the hit test proved the click target is blocked.
+    FocusEdge|Out-Null
+    [Windows.Forms.SendKeys]::SendWait('{ESC}')
+    Start-Sleep -Milliseconds 700
+  }
+  return (ThumbnailPointIsClear $thumb)
+}
 function SelectViewerThumbnail($thumbIndex,$previousFingerprint){
   for($attempt=1;$attempt -le 3;$attempt++){
     $viewer=WaitForViewerAfterSave 1
     if(-not $viewer -or $thumbIndex -ge $viewer.thumbs.Count){continue}
     $thumb=$viewer.thumbs[$thumbIndex]
     if($thumb.offscreen){ScrollElementIntoView $thumb.element|Out-Null;$viewer=WaitForViewerAfterSave 1;if(-not $viewer -or $thumbIndex -ge $viewer.thumbs.Count){continue};$thumb=$viewer.thumbs[$thumbIndex]}
+    if(-not (EnsureThumbnailPointIsClear $thumb.element)){continue}
     if($attempt -eq 2){InvokeElement $thumb.element|Out-Null}else{ClickElement $thumb.element|Out-Null}
     $deadline=[DateTime]::UtcNow.AddSeconds(8)
     while([DateTime]::UtcNow -lt $deadline){
@@ -250,8 +329,25 @@ function SelectViewerThumbnail($thumbIndex,$previousFingerprint){
       $main=FindGeneratedMainImage $false
       if(-not $main){continue}
       $fingerprint=GetImageRegionFingerprint $main
-      if(-not $previousFingerprint -or ($fingerprint -and $fingerprint -ne $previousFingerprint)){return @{main=$main;fingerprint=$fingerprint}}
+      $distance=GetImageFingerprintDistance $previousFingerprint $fingerprint
+      if(-not $previousFingerprint -or ($fingerprint -and $distance -ge 4.0)){return @{main=$main;fingerprint=$fingerprint;distance=$distance}}
     }
+  }
+  return $null
+}
+function FindSavedTargetFile($targetBase){
+  $targetDir=[IO.Path]::GetDirectoryName($targetBase);$baseName=[IO.Path]::GetFileName($targetBase)
+  if(-not (Test-Path -LiteralPath $targetDir -PathType Container)){return $null}
+  return Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$_.BaseName -eq $baseName -and $_.Extension -ne '.crdownload'}|Select-Object -First 1
+}
+function FindVisibleSaveDialog(){
+  $desktop=[Windows.Automation.AutomationElement]::RootElement
+  foreach($candidate in (All $desktop)){
+    try{
+      if($candidate.Current.ControlType.ProgrammaticName -match 'Window' -and $candidate.Current.Name -match "^Save As$|^$saveAsWord$" -and -not $candidate.Current.IsOffscreen){
+        $r=$candidate.Current.BoundingRectangle;if($r.Width -gt 0 -and $r.Height -gt 0){return $candidate}
+      }
+    }catch{}
   }
   return $null
 }
@@ -275,12 +371,19 @@ function SubmitSavePath($targetBase){
     if($attempt -eq 1){InvokeElement $save|Out-Null}
     elseif($attempt -eq 2){try{$fileName.SetFocus()}catch{};Start-Sleep -Milliseconds 150;[Windows.Forms.SendKeys]::SendWait('{ENTER}')}
     else{ClickElement $save|Out-Null}
-    for($check=0;$check -lt 12;$check++){
+    for($check=0;$check -lt 20;$check++){
       Start-Sleep -Milliseconds 250
-      try{$null=$dialog.Current.Name}catch{$dialogClosed=$true;break}
+      if(FindSavedTargetFile $targetBase){
+        Start-Sleep -Milliseconds 500
+        $remainingDialog=FindVisibleSaveDialog
+        if($remainingDialog){try{$remainingDialog.SetFocus()}catch{};[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 350}
+        $dialogClosed=$true;break
+      }
+      if(-not (FindVisibleSaveDialog)){$dialogClosed=$true;break}
     }
   }
-  if(-not $dialogClosed){throw "Save As dialog remained open after Invoke, Enter and mouse click for target: $targetBase"}
+  if(-not $dialogClosed -and (FindSavedTargetFile $targetBase)){$dialogClosed=$true}
+  if(-not $dialogClosed){throw "Save As dialog remained open and no saved file appeared after Invoke, Enter and mouse click for target: $targetBase"}
 }
 
 $loginWord=([char]0x767b)+([char]0x5f55)
@@ -347,7 +450,7 @@ if($Action -eq 'inspect'){
     if($n -match "Remove file|^$removeFile" -and $el.Current.ControlType.ProgrammaticName -match 'Button'){$attachmentCount++}
     if($el.Current.AutomationId -eq 'composer-submit-button'){$submitEnabled=$el.Current.IsEnabled}
   }
-  Result @{found=$true;title=$p.MainWindowTitle;windowHandle=[int64]$p.MainWindowHandle;hasComposer=$composer;hasLogin=$login;hasSecurity=$security;hasRateLimit=$rateLimit;hasStop=$stop;downloadCount=$downloads;generatedCount=$generatedCount;attachmentCount=$attachmentCount;submitEnabled=$submitEnabled;editCandidates=$editCandidates;buttonCandidates=$buttonCandidates}
+  Result @{found=$true;title=$root.Current.Name;windowHandle=[int64]$root.Current.NativeWindowHandle;hasComposer=$composer;hasLogin=$login;hasSecurity=$security;hasRateLimit=$rateLimit;hasStop=$stop;downloadCount=$downloads;generatedCount=$generatedCount;attachmentCount=$attachmentCount;submitEnabled=$submitEnabled;editCandidates=$editCandidates;buttonCandidates=$buttonCandidates}
 }
 FocusEdge|Out-Null; $root=Root
 if($Action -eq 'get-current-chat-url'){
@@ -363,6 +466,21 @@ if($Action -eq 'open-chat-url'){
   [Windows.Forms.SendKeys]::SendWait('^l');Start-Sleep -Milliseconds 200;SetClipboardText $url;[Windows.Forms.SendKeys]::SendWait('^v{ENTER}');Start-Sleep -Milliseconds 400
   $loaded=$false;for($i=0;$i -lt 30;$i++){if(FindByAutomationId (Root) 'prompt-textarea'){$loaded=$true;break};Start-Sleep -Milliseconds 500}
   if(-not $loaded){throw 'Recorded ChatGPT conversation did not load'};Result @{ok=$true}
+}
+if($Action -eq 'open-sidebar-chat'){
+  $chatTitle=[string]$payload.title;if(-not $chatTitle){throw 'Sidebar chat title is required'}
+  $escaped=[Regex]::Escape($chatTitle);$target=FindByName (Root) "^(置顶 )?$escaped$" 'Button|Hyperlink'
+  if(-not $target){throw "Sidebar chat was not found: $chatTitle"}
+  ClickElement $target|Out-Null;Start-Sleep -Milliseconds 800
+  $requireImage=$payload.requireImage -eq $true
+  $loaded=$false;for($i=0;$i -lt 120;$i++){
+    $hasComposer=[bool](FindByAutomationId (Root) 'prompt-textarea')
+    $hasImage=if($requireImage){[bool](FindGeneratedMainImage $false)}else{$true}
+    if($hasComposer -and $hasImage){$loaded=$true;break}
+    Start-Sleep -Milliseconds 500
+  }
+  if(-not $loaded){throw "Sidebar chat did not load: $chatTitle"}
+  Result @{ok=$true;title=$chatTitle;hasImage=$hasImage}
 }
 if($Action -eq 'refresh-page'){
   [Windows.Forms.SendKeys]::SendWait('^r');Start-Sleep -Milliseconds 400
@@ -452,6 +570,16 @@ if($Action -eq 'viewer-image-count'){
   while([DateTime]::UtcNow -lt $deadline){$main=FindGeneratedMainImage $false;if(-not $main){$main=FindGeneratedMainImage $true};if($main){$count=@(FindViewerThumbnails $main).Count;if($count -gt $best){$best=$count};$total=if($best -eq 0){1}elseif($best -ge 4){5}else{$best+1};if($total -eq $last){$stable++}else{$last=$total;$stable=1};if($total -ge $targetTotal -and $stable -ge 6){break}};Start-Sleep -Milliseconds 500}
   Result @{found=$true;single=($best -eq 0);five=($best -ge 4);thumbnailCount=$best;total=if($best -eq 0){1}elseif($best -ge 4){5}else{$best+1}}
 }
+if($Action -eq 'inspect-viewer-layout'){
+  $main=WaitForGeneratedMainImage 20;if(-not $main){Result @{found=$false}}
+  $thumbs=@(FindViewerThumbnails $main);$selected=GetSelectedThumbnailIndex $thumbs;$items=@()
+  for($i=0;$i -lt $thumbs.Count;$i++){
+    $thumb=$thumbs[$i];$el=$thumb.element;$r=$thumb.rect;$isSelected=$false
+    try{$selection=$el.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern);$isSelected=$selection.Current.IsSelected}catch{}
+    $items+=@{index=$i;name=$el.Current.Name;automationId=$el.Current.AutomationId;className=$el.Current.ClassName;isSelected=$isSelected;hasFocus=$el.Current.HasKeyboardFocus;offscreen=$el.Current.IsOffscreen;patterns=@($el.GetSupportedPatterns()|ForEach-Object{$_.ProgrammaticName});rect=@{x=$r.X;y=$r.Y;width=$r.Width;height=$r.Height}}
+  }
+  $mr=$main.rect;Result @{found=$true;main=@{name=$main.element.Current.Name;automationId=$main.element.Current.AutomationId;rect=@{x=$mr.X;y=$mr.Y;width=$mr.Width;height=$mr.Height}};selected=$selected;thumbs=$items}
+}
 if($Action -eq 'dismiss-alert'){
   $button=FindByName ([Windows.Automation.AutomationElement]::RootElement) "^OK$|^$confirmWord$" 'Button'; if(-not $button){throw 'Confirmation button was not found'}; InvokeElement $button|Out-Null; Result @{ok=$true}
 }
@@ -515,6 +643,7 @@ if($Action -eq 'save-viewer-images'){
     $savedFile=$null;for($i=0;$i -lt 60;$i++){Start-Sleep -Milliseconds 500;$new=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$before -notcontains $_.FullName -and $_.BaseName -eq $baseName -and $_.Extension -ne '.crdownload'});if($new.Count){$savedFile=$new[0].FullName;break}};if(-not $savedFile){throw "Saved file did not appear for thumbnail $slot"}
     # Do not press Escape here: depending on Edge/Windows version it can close the
     # image viewer itself, leaving only the first image available on the next pass.
+    CloseDownloadsFlyoutIfOpen|Out-Null
     $viewerAfterSave=WaitForViewerAfterSave 0
     if($slot -lt ($candidateTotal-1) -and (-not $viewerAfterSave -or -not $viewerAfterSave.main)){throw "Image viewer closed after saving thumbnail $slot"}
     Start-Sleep -Milliseconds 400;$saved+=@{index=$slot;file=$savedFile;total=$total}
