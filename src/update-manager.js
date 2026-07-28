@@ -47,20 +47,63 @@ function resolvePackageSource(manifestSource, packageValue) {
   if (isHttps(manifestSource)) return new URL(packageValue, manifestSource).href;
   return path.resolve(path.dirname(localPath(manifestSource)), packageValue);
 }
-async function downloadHttps(url, target, redirects = 0) {
+async function downloadHttpsOnce(url, target, options = {}, redirects = 0) {
   if (redirects > 5) throw new Error('更新下载重定向次数过多');
   await fsp.mkdir(path.dirname(target), { recursive: true });
   return new Promise((resolve, reject) => {
     const request = https.get(url, { headers: { 'User-Agent': 'EcommerceMainImageGenerator-Updater' } }, (response) => {
-      if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) { response.resume(); const next = new URL(response.headers.location, url); if (next.protocol !== 'https:') { reject(new Error('更新下载拒绝从HTTPS降级到不安全连接')); return; } downloadHttps(next.href, target, redirects + 1).then(resolve, reject); return; }
+      if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) { response.resume(); const next = new URL(response.headers.location, url); if (next.protocol !== 'https:') { reject(new Error('更新下载拒绝从HTTPS降级到不安全连接')); return; } downloadHttpsOnce(next.href, target, options, redirects + 1).then(resolve, reject); return; }
       if (response.statusCode !== 200) { response.resume(); reject(new Error(`更新下载失败：HTTP ${response.statusCode}`)); return; }
-      const output = fs.createWriteStream(target); response.pipe(output); output.on('finish', () => output.close(resolve)); output.on('error', reject);
+      const total = Number(response.headers['content-length']) || 0;
+      let received = 0; let lastPercent = -1; let lastReportAt = 0; let settled = false;
+      const partFile = `${target}.part`;
+      const output = fs.createWriteStream(partFile);
+      const fail = (error) => {
+        if (settled) return; settled = true;
+        response.destroy(); output.destroy();
+        fsp.rm(partFile, { force: true }).catch(() => {}).finally(() => reject(error));
+      };
+      response.setTimeout(90 * 1000, () => fail(new Error('更新下载90秒没有收到新数据，已停止本次下载，请重试')));
+      response.on('data', (chunk) => {
+        received += chunk.length;
+        const percent = total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : null;
+        const now = Date.now();
+        if (percent !== lastPercent || now - lastReportAt >= 1000) {
+          lastPercent = percent; lastReportAt = now;
+          options.onProgress?.({ received, total, percent, attempt: options.attempt || 1 });
+        }
+      });
+      response.on('error', fail); output.on('error', fail); response.pipe(output);
+      output.on('finish', () => output.close(async () => {
+        if (settled) return;
+        try {
+          await fsp.rm(target, { force: true });
+          await fsp.rename(partFile, target);
+          settled = true;
+          options.onProgress?.({ received, total: total || received, percent: 100, attempt: options.attempt || 1 });
+          resolve();
+        } catch (error) { fail(error); }
+      }));
     });
-    // GitHub release assets can take more than a minute before the next chunk
-    // arrives on slower or proxied connections. This is an inactivity timeout,
-    // not a total-download deadline, so keep it generous for the ~500 MB app.
-    request.setTimeout(10 * 60 * 1000, () => request.destroy(new Error('更新下载长时间无数据，请检查网络后重试'))); request.on('error', reject);
+    request.setTimeout(90 * 1000, () => request.destroy(new Error('连接更新服务器90秒无响应，已停止本次下载，请重试')));
+    request.on('error', reject);
   });
+}
+async function downloadHttps(url, target, options = {}) {
+  let lastError;
+  const attempts = Math.max(1, Number(options.attempts) || 3);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      options.onProgress?.({ received: 0, total: 0, percent: null, attempt });
+      await downloadHttpsOnce(url, target, { ...options, attempt });
+      return;
+    } catch (error) {
+      lastError = error;
+      await fsp.rm(`${target}.part`, { force: true }).catch(() => {});
+      if (attempt < attempts) await wait(attempt * 1500);
+    }
+  }
+  throw new Error(`更新下载重试${attempts}次仍失败：${lastError?.message || '未知网络错误'}`);
 }
 async function readTextSource(source) { if (isHttps(source)) return new Promise((resolve, reject) => { https.get(source, (response) => { if (response.statusCode !== 200) { response.resume(); reject(new Error(`更新清单读取失败：HTTP ${response.statusCode}`)); return; } let text = ''; response.setEncoding('utf8'); response.on('data', (chunk) => { text += chunk; }); response.on('end', () => resolve(text)); }).on('error', reject); }); return fsp.readFile(localPath(source), 'utf8'); }
 function runPowerShell(args, timeoutMs = 180000) { return new Promise((resolve, reject) => { const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { windowsHide: true }); let stderr = ''; const timer = setTimeout(() => { child.kill(); reject(new Error('更新解压超时')); }, timeoutMs); child.stderr.on('data', (chunk) => { stderr += chunk; }); child.on('error', reject); child.on('close', (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(stderr.trim() || `更新解压失败：${code}`)); }); }); }
@@ -68,7 +111,7 @@ function runPowerShell(args, timeoutMs = 180000) { return new Promise((resolve, 
 class UpdateManager {
   constructor({ userDataDir, currentVersion, installDir, executablePath, packaged, onStatus = () => {} }) {
     this.userDataDir = userDataDir; this.currentVersion = currentVersion; this.installDir = installDir; this.executablePath = executablePath; this.packaged = packaged; this.onStatus = onStatus;
-    this.settingsFile = path.join(userDataDir, 'update-settings.json'); this.readyUpdate = null;
+    this.settingsFile = path.join(userDataDir, 'update-settings.json'); this.readyUpdate = null; this.checkPromise = null; this.lastStatus = null;
   }
   defaultSettings() { return { autoCheck: true, autoInstallWhenIdle: false, source: DEFAULT_UPDATE_SOURCE }; }
   async getSettings() {
@@ -82,8 +125,13 @@ class UpdateManager {
     } catch { return this.defaultSettings(); }
   }
   async saveSettings(settings) { const safe = { ...this.defaultSettings(), ...settings }; if (/^http:\/\//i.test(safe.source)) throw new Error('远程更新源必须使用HTTPS'); await fsp.mkdir(this.userDataDir, { recursive: true }); await fsp.writeFile(this.settingsFile, JSON.stringify(safe, null, 2), 'utf8'); return safe; }
-  status(value) { this.onStatus(value); return value; }
+  status(value) { this.lastStatus = value; this.onStatus(value); return value; }
   async check(sourceOverride) {
+    if (this.checkPromise) return this.checkPromise;
+    this.checkPromise = this.performCheck(sourceOverride).finally(() => { this.checkPromise = null; });
+    return this.checkPromise;
+  }
+  async performCheck(sourceOverride) {
     const settings = await this.getSettings(); const source = String(sourceOverride || settings.source || '').trim();
     if (!source) return this.status({ state: 'unconfigured', message: '尚未配置更新源：请点击“选择更新源”，选择共享目录中的 update-manifest.json' });
     if (/^http:\/\//i.test(source)) throw new Error('远程更新源必须使用HTTPS');
@@ -100,10 +148,18 @@ class UpdateManager {
     const updateDir = createUpdateWorkDir(this.userDataDir, manifest.version);
     const zipFile = path.join(updateDir, 'package.zip');
     await fsp.mkdir(updateDir, { recursive: true });
-    this.status({ state: 'downloading', message: `正在下载 ${manifest.version}…`, version: manifest.version });
-    if (isHttps(packageSource)) await downloadHttps(packageSource, zipFile); else await fsp.copyFile(localPath(packageSource), zipFile);
+    const reportProgress = ({ received, total, percent, attempt }) => {
+      const percentText = Number.isFinite(percent) ? ` ${percent}%` : '';
+      const retryText = attempt > 1 ? `（第${attempt}次尝试）` : '';
+      this.status({ state: 'downloading', message: `正在下载 ${manifest.version}${percentText}…${retryText}`, version: manifest.version, receivedBytes: received, totalBytes: total, progress: percent, attempt });
+    };
+    this.status({ state: 'downloading', message: `正在下载 ${manifest.version}…`, version: manifest.version, receivedBytes: 0, totalBytes: 0, progress: null, attempt: 1 });
+    if (isHttps(packageSource)) await downloadHttps(packageSource, zipFile, { onProgress: reportProgress, attempts: 3 }); else { await fsp.copyFile(localPath(packageSource), zipFile); const size = (await fsp.stat(zipFile)).size; reportProgress({ received: size, total: size, percent: 100, attempt: 1 }); }
+    this.status({ state: 'verifying', message: `正在校验 ${manifest.version} 更新包…`, version: manifest.version, progress: 100 });
     const actualHash = await sha256File(zipFile); if (actualHash.toLowerCase() !== manifest.sha256.toLowerCase()) { try { await removeWithRetries(updateDir); } catch {} throw new Error('更新包SHA256校验失败，已拒绝安装'); }
-    const stagedDir = path.join(updateDir, 'staged'); await runPowerShell(['-Command', `Expand-Archive -LiteralPath '${zipFile.replace(/'/g, "''")}' -DestinationPath '${stagedDir.replace(/'/g, "''")}' -Force`]);
+    const stagedDir = path.join(updateDir, 'staged');
+    this.status({ state: 'extracting', message: `正在解压 ${manifest.version} 更新包…`, version: manifest.version, progress: null });
+    await runPowerShell(['-Command', `Expand-Archive -LiteralPath '${zipFile.replace(/'/g, "''")}' -DestinationPath '${stagedDir.replace(/'/g, "''")}' -Force`]);
     const entries = await fsp.readdir(stagedDir, { withFileTypes: true }); let contentDir = stagedDir;
     if (entries.length === 1 && entries[0].isDirectory()) contentDir = path.join(stagedDir, entries[0].name);
     const exeName = path.basename(this.executablePath); if (!fs.existsSync(path.join(contentDir, exeName))) throw new Error(`更新包无效：未找到 ${exeName}`);

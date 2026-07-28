@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let root = ''; let running = false; let savedAvailable = false;
+let root = ''; let running = false; let savedAvailable = false; let updateBusy = false;
 const UI_SETTINGS_KEY = 'ecommerce-main-image-generator.ui-settings.v1';
 const clampInt = (value, min, max, fallback) => { const numeric = Number(value); return Math.max(min, Math.min(max, Math.trunc(Number.isFinite(numeric) ? numeric : fallback))); };
 function currentUiPreferences() {
@@ -53,12 +53,39 @@ window.appApi.onStatus((s) => {
   $('product').textContent = s.product || '—'; $('productCount').textContent = `${s.productIndex || 0} / ${s.productTotal || 0}`;
   $('round').textContent = s.round ? `${s.round} / 10` : '—'; $('detectedImages').textContent = `本轮识别 ${Number.isFinite(s.detectedImages) && s.detectedImages > 0 ? s.detectedImages : '—'} / 5 张`; $('completed').textContent = `${s.completed || 0} / 50`; $('countdown').textContent = formatSeconds(s.remainingSeconds); $('cycleStatus').textContent = `当前批次 ${s.currentCycle || 0} / ${s.totalCycles || Number($('totalCycles').value) || 1}`;
   $('runtimeMetrics').textContent = `当前步骤：${s.workflowStep || s.phase || '—'}`; $('adaptiveMetrics').textContent = `本对话等待：${s.adaptiveGenerationSeconds || '—'}秒；自适应间隔：${s.adaptiveDelaySeconds || '—'}秒；近期失败率：${Math.round((s.recentFailureRate || 0) * 100)}%；质量拒绝：${s.qualityRejected || 0}，提示：${s.qualityWarnings || 0}`;
-  $('start').disabled = !!s.running; $('continueSaved').disabled = !!s.running || !savedAvailable; $('choose').disabled = !!s.running; $('totalCycles').disabled = !!s.running; $('waitEnabled').disabled = !!s.running; $('generationTimeoutSeconds').disabled = !!s.running; $('ignoredCheckEveryChats').disabled = !!s.running; $('adaptiveScheduling').disabled = !!s.running; $('qualityEnabled').disabled = !!s.running; $('minDimension').disabled = !!s.running; $('requireWhite').disabled = !!s.running; $('strictConsistency').disabled = !!s.running; $('creativeEnabled').disabled = !!s.running; $('globalCreativeRequirements').disabled = !!s.running; refreshWaitUi(); $('pause').disabled = !s.running || s.paused; $('resume').disabled = !s.running || !s.paused; $('stop').disabled = !s.running; $('checkUpdate').disabled = !!s.running; $('chooseUpdateSource').disabled = !!s.running;
+  $('start').disabled = !!s.running; $('continueSaved').disabled = !!s.running || !savedAvailable; $('choose').disabled = !!s.running; $('totalCycles').disabled = !!s.running; $('waitEnabled').disabled = !!s.running; $('generationTimeoutSeconds').disabled = !!s.running; $('ignoredCheckEveryChats').disabled = !!s.running; $('adaptiveScheduling').disabled = !!s.running; $('qualityEnabled').disabled = !!s.running; $('minDimension').disabled = !!s.running; $('requireWhite').disabled = !!s.running; $('strictConsistency').disabled = !!s.running; $('creativeEnabled').disabled = !!s.running; $('globalCreativeRequirements').disabled = !!s.running; refreshWaitUi(); $('pause').disabled = !s.running || s.paused; $('resume').disabled = !s.running || !s.paused; $('stop').disabled = !s.running; $('checkUpdate').disabled = !!s.running || updateBusy; $('chooseUpdateSource').disabled = !!s.running || updateBusy;
   if (wasRunning && !running) refreshSavedState().catch(() => {});
 });
+function formatUpdateBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes >= 1024 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+function renderUpdateStatus(status = {}) {
+  const activeStates = new Set(['checking', 'downloading', 'verifying', 'extracting', 'installing']);
+  updateBusy = activeStates.has(status.state);
+  $('updateStatus').textContent = status.message || status.state || '等待检查更新';
+  $('checkUpdate').disabled = running || updateBusy;
+  $('chooseUpdateSource').disabled = running || updateBusy;
+  $('installUpdate').disabled = status.state !== 'ready' || running;
+  const wrap = $('updateProgressWrap'); const bar = $('updateProgress'); const label = $('updateProgressText');
+  const show = activeStates.has(status.state) || status.state === 'ready';
+  wrap.hidden = !show;
+  if (!show) { bar.removeAttribute('value'); label.textContent = ''; return; }
+  if (status.state === 'downloading' && Number.isFinite(status.progress)) {
+    bar.value = Math.max(0, Math.min(100, status.progress));
+    const sizes = status.totalBytes > 0 ? `${formatUpdateBytes(status.receivedBytes)} / ${formatUpdateBytes(status.totalBytes)}` : formatUpdateBytes(status.receivedBytes);
+    label.textContent = `${Math.round(status.progress)}% · ${sizes}${status.attempt > 1 ? ` · 重试${status.attempt}` : ''}`;
+  } else if (status.state === 'verifying' || status.state === 'ready') {
+    bar.value = 100; label.textContent = status.state === 'ready' ? '下载与校验完成' : '下载完成，正在校验';
+  } else {
+    bar.removeAttribute('value');
+    label.textContent = status.state === 'extracting' ? '正在解压安装文件' : status.state === 'installing' ? '正在安装' : '正在连接更新服务器';
+  }
+}
 async function loadUpdateUi() { try { $('appVersion').textContent = `当前版本 v${await window.appApi.getVersion()}`; const settings = await window.appApi.getUpdateSettings(); $('updateSource').value = settings.source || ''; $('autoCheckUpdate').checked = settings.autoCheck !== false; } catch (error) { $('appVersion').textContent = '版本读取失败'; $('updateStatus').textContent = error.message; } }
 $('chooseUpdateSource').onclick = async () => { try { const source = await window.appApi.chooseUpdateSource(); if (!source) return; $('updateSource').value = source; await window.appApi.saveUpdateSettings({ source, autoCheck: $('autoCheckUpdate').checked }); $('updateStatus').textContent = '更新源已保存，可以检查更新'; } catch (error) { $('updateStatus').textContent = `选择失败：${error.message}`; } };
-$('checkUpdate').onclick = async () => { try { await window.appApi.saveUpdateSettings({ source: $('updateSource').value.trim(), autoCheck: $('autoCheckUpdate').checked }); const result = await window.appApi.checkUpdate($('updateSource').value.trim()); $('updateStatus').textContent = result.message; $('installUpdate').disabled = result.state !== 'ready'; } catch (error) { $('updateStatus').textContent = `检查失败：${error.message}`; } };
+$('checkUpdate').onclick = async () => { try { await window.appApi.saveUpdateSettings({ source: $('updateSource').value.trim(), autoCheck: $('autoCheckUpdate').checked }); const result = await window.appApi.checkUpdate($('updateSource').value.trim()); renderUpdateStatus(result); } catch (error) { renderUpdateStatus({ state: 'error', message: `检查失败：${error.message}` }); } };
 $('installUpdate').onclick = async () => { if (!confirm('安装更新会关闭并重新打开软件，任务设置和断点会保留。现在安装？')) return; try { await window.appApi.installUpdate(); } catch (error) { $('updateStatus').textContent = `安装失败：${error.message}`; } };
 $('autoCheckUpdate').onchange = () => window.appApi.saveUpdateSettings({ source: $('updateSource').value.trim(), autoCheck: $('autoCheckUpdate').checked }).catch((error) => { $('updateStatus').textContent = error.message; });
-window.appApi.onUpdateStatus((status) => { $('updateStatus').textContent = status.message || status.state; $('installUpdate').disabled = status.state !== 'ready' || running; });
+window.appApi.onUpdateStatus(renderUpdateStatus);

@@ -26,6 +26,25 @@ test('界面提供更新源文件选择入口', () => {
   const fs = require('node:fs'); const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'index.html'), 'utf8'); const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'renderer.js'), 'utf8'); const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
   assert.match(html, /id="chooseUpdateSource"/); assert.match(renderer, /chooseUpdateSource\(\)/); assert.match(preload, /update:chooseSource/);
 });
+test('更新界面显示真实下载百分比、文件大小和处理阶段', () => {
+  const fs = require('node:fs'); const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'index.html'), 'utf8'); const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'renderer.js'), 'utf8'); const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'style.css'), 'utf8');
+  assert.match(html, /id="updateProgressWrap"/); assert.match(html, /<progress id="updateProgress" max="100"/);
+  assert.match(renderer, /function renderUpdateStatus/); assert.match(renderer, /status\.receivedBytes/); assert.match(renderer, /status\.totalBytes/); assert.match(renderer, /status\.progress/);
+  assert.match(renderer, /正在解压安装文件/); assert.match(css, /\.updateProgress progress/);
+});
+test('并行自动检查与手动检查复用同一个下载任务', async () => {
+  const manager = new UpdateManager({ userDataDir: 'C:\\temp\\update-lock', currentVersion: '1.0.0', installDir: 'C:\\app', executablePath: 'C:\\app\\app.exe', packaged: false });
+  let calls = 0; manager.performCheck = async () => { calls += 1; await new Promise((resolve) => setTimeout(resolve, 20)); return { state: 'current' }; };
+  const [first, second] = await Promise.all([manager.check(), manager.check()]);
+  assert.equal(calls, 1); assert.equal(first.state, 'current'); assert.equal(second.state, 'current'); assert.equal(manager.checkPromise, null);
+});
+test('下载器提供进度、90秒停滞检测和有限重试', () => {
+  const fs = require('node:fs'); const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'update-manager.js'), 'utf8');
+  assert.match(source, /options\.onProgress\?\.\(\{ received, total, percent/);
+  assert.match(source, /response\.setTimeout\(90 \* 1000/);
+  assert.match(source, /attempts: 3/);
+  assert.match(source, /state: 'verifying'/); assert.match(source, /state: 'extracting'/);
+});
 test('品牌名称统一改为豆包的豆脑且保留内部数据标识', () => {
   const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')); const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'index.html'), 'utf8'); const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
   assert.equal(pkg.build.productName, '豆包的豆脑'); assert.equal(pkg.build.nsis.shortcutName, '豆包的豆脑'); assert.match(pkg.build.win.artifactName, /^豆包的豆脑-/); assert.equal(pkg.name, 'ecommerce-main-image-generator'); assert.match(html, /<h1>豆包的豆脑<\/h1>/); assert.match(main, /title: '豆包的豆脑'/);
