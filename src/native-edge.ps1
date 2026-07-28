@@ -307,6 +307,11 @@ function ThumbnailPointIsClear($thumb){
 function EnsureThumbnailPointIsClear($thumb){
   for($attempt=0;$attempt -lt 4;$attempt++){
     if(ThumbnailPointIsClear $thumb){return $true}
+    if(FindVisibleSaveDialog){
+      CloseVisibleSaveDialogs|Out-Null
+      Start-Sleep -Milliseconds 250
+      if(ThumbnailPointIsClear $thumb){return $true}
+    }
     # A browser flyout (most commonly Downloads) is covering the thumbnail.
     # Escape is safe here because the hit test proved the click target is blocked.
     FocusEdge|Out-Null
@@ -351,26 +356,45 @@ function FindVisibleSaveDialog(){
   }
   return $null
 }
+function CloseVisibleSaveDialogs(){
+  for($attempt=0;$attempt -lt 4;$attempt++){
+    $dialog=FindVisibleSaveDialog
+    if(-not $dialog){return $true}
+    try{$dialog.SetFocus()}catch{
+      try{[NativeWindow]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle)|Out-Null}catch{}
+    }
+    Start-Sleep -Milliseconds 180
+    [Windows.Forms.SendKeys]::SendWait('{ESC}')
+    Start-Sleep -Milliseconds 450
+  }
+  return (-not (FindVisibleSaveDialog))
+}
 function FindSaveFileNameField($dialog){
   foreach($automationId in @('1001','1148')){
     $candidate=FindVisibleByAutomationId $dialog $automationId
     if($candidate){
-      if($candidate.Current.ControlType.ProgrammaticName -match 'Edit'){return $candidate}
+      if($candidate.Current.ControlType.ProgrammaticName -match 'Edit' -or $candidate.Current.ClassName -match '^Edit$'){return $candidate}
       foreach($child in (All $candidate)){
-        try{if(-not $child.Current.IsOffscreen -and $child.Current.IsEnabled -and $child.Current.ControlType.ProgrammaticName -match 'Edit'){return $child}}catch{}
+        try{if(-not $child.Current.IsOffscreen -and $child.Current.IsEnabled -and ($child.Current.ControlType.ProgrammaticName -match 'Edit' -or $child.Current.ClassName -match '^Edit$')){return $child}}catch{}
       }
+    }
+  }
+  $fileNameHost=FindVisibleByAutomationId $dialog 'FileNameControlHost'
+  if($fileNameHost){
+    foreach($child in (All $fileNameHost)){
+      try{if(-not $child.Current.IsOffscreen -and $child.Current.IsEnabled -and ($child.Current.ControlType.ProgrammaticName -match 'Edit' -or $child.Current.ClassName -match '^Edit$')){return $child}}catch{}
     }
   }
   $dialogRect=$dialog.Current.BoundingRectangle;$candidates=@()
   foreach($candidate in (All $dialog)){
     try{
       $rect=$candidate.Current.BoundingRectangle
-      if(-not $candidate.Current.IsOffscreen -and $candidate.Current.IsEnabled -and $candidate.Current.ControlType.ProgrammaticName -match 'Edit' -and $rect.Width -ge 180 -and $rect.Height -ge 18 -and $rect.Y -gt ($dialogRect.Y+$dialogRect.Height*0.55)){
+      if(-not $candidate.Current.IsOffscreen -and $candidate.Current.IsEnabled -and ($candidate.Current.ControlType.ProgrammaticName -match 'Edit' -or $candidate.Current.ClassName -match '^Edit$') -and $rect.Width -ge 180 -and $rect.Height -ge 18 -and $rect.Y -gt ($dialogRect.Y+$dialogRect.Height*0.55)){
         $candidates+=@{element=$candidate;rect=$rect}
       }
     }catch{}
   }
-  if($candidates.Count){return ($candidates|Sort-Object {$_.rect.Y} -Descending|Select-Object -First 1).element}
+  if($candidates.Count){return ($candidates|Sort-Object {$_.rect.Y}|Select-Object -First 1).element}
   return $null
 }
 function ReadElementValue($element){
@@ -649,7 +673,34 @@ if($Action -eq 'recover-save-ui'){
   if(-not $loaded){throw 'ChatGPT page did not recover after closing the save interface and refreshing'}
   Result @{ok=$true;url=$target}
 }
+if($Action -eq 'inspect-save-dialog-controls'){
+  [Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 300
+  $main=WaitForGeneratedMainImage 20
+  if(-not $main){throw 'Image viewer main image was not found'}
+  RightClickElement $main.element|Out-Null
+  $desktop=[Windows.Automation.AutomationElement]::RootElement;$edgeRect=(Root).Current.BoundingRectangle
+  $saveNames=@('Save image as','Save image as...','Save image as (V)',"$saveImageAs","$saveImageAs(V)","$saveImageAs(&V)","$saveAsWord","$saveAsWord(S)","$saveAsWord(&S)")
+  $saveAs=$null
+  for($i=0;$i -lt 20;$i++){$saveAs=FindExactNameInProcess $desktop $saveNames 'msedge';if($saveAs){break};Start-Sleep -Milliseconds 150}
+  if(-not $saveAs){throw 'Save image as menu item was not found'}
+  ClickElement $saveAs|Out-Null
+  $dialog=$null
+  for($wait=0;$wait -lt 24;$wait++){Start-Sleep -Milliseconds 250;$dialog=FindVisibleSaveDialog;if($dialog){break}}
+  if(-not $dialog){throw 'Save As dialog was not found after clicking the image context-menu command'}
+  $items=@()
+  foreach($element in (All $dialog)){
+    try{
+      if($element.Current.IsOffscreen){continue}
+      $rect=$element.Current.BoundingRectangle
+      if($rect.Width -le 0 -or $rect.Height -le 0){continue}
+      $patterns=@();foreach($pattern in $element.GetSupportedPatterns()){$patterns+=$pattern.ProgrammaticName}
+      $items+=@{name=$element.Current.Name;automationId=$element.Current.AutomationId;className=$element.Current.ClassName;type=$element.Current.ControlType.ProgrammaticName;x=[int]$rect.X;y=[int]$rect.Y;width=[int]$rect.Width;height=[int]$rect.Height;patterns=$patterns;value=(ReadElementValue $element)}
+    }catch{}
+  }
+  Result @{dialog=@{name=$dialog.Current.Name;automationId=$dialog.Current.AutomationId;className=$dialog.Current.ClassName};items=$items}
+}
 if($Action -eq 'save-viewer-images'){
+  CloseVisibleSaveDialogs|Out-Null
   $initialMain=WaitForGeneratedMainImage 45
   if(-not $initialMain){throw 'Image viewer main image was not found after waiting 45 seconds'}
   $needed=[int]$payload.needed; $startNumber=[int]$payload.startNumber; $targetDir=[string]$payload.targetDir; $fileStem=[string]$payload.fileStem; $already=@($payload.processedIndexes|ForEach-Object{[int]$_}); $saved=@()
@@ -688,7 +739,7 @@ if($Action -eq 'save-viewer-images'){
       ClickElement $saveAs|Out-Null; Start-Sleep -Milliseconds 700
       try{SubmitSavePath (Join-Path $targetDir $baseName);$submitted=$true}catch{
         $lastSaveError=$_.Exception.Message
-        for($escapeAttempt=0;$escapeAttempt -lt 3;$escapeAttempt++){if(-not (FindVisibleSaveDialog)){break};[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 350}
+        CloseVisibleSaveDialogs|Out-Null
         FocusEdge|Out-Null
         Start-Sleep -Milliseconds 500
       }

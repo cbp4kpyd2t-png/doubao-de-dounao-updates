@@ -15,6 +15,8 @@ test('另存为流程使用窗口控件而非Alt+N快捷键', () => {
   const submitSave = script.slice(script.indexOf('function SubmitSavePath'), script.indexOf('$loginWord='));
   assert.match(script, /Save As file name field was not found/);
   assert.match(script, /function FindSaveFileNameField/);
+  assert.match(script, /ClassName -match '\^Edit\$'/);
+  assert.match(script, /FindVisibleByAutomationId \$dialog 'FileNameControlHost'/);
   assert.match(script, /function WriteAndVerifySavePath/);
   assert.match(submitSave, /Save As file name field did not accept the full target path/);
   assert.match(submitSave, /\^Open\$\|\^\$openWord\$/);
@@ -33,6 +35,7 @@ test('另存为流程使用窗口控件而非Alt+N快捷键', () => {
   assert.match(submitSave, /Save As dialog remained open for 15 seconds and no saved file appeared/);
   assert.match(script, /function FindSavedTargetFile/);
   assert.match(script, /function FindVisibleSaveDialog/);
+  assert.match(script, /function CloseVisibleSaveDialogs/);
   assert.match(submitSave, /FindSavedTargetFile \$targetBase/);
   assert.match(submitSave, /if\(-not \(FindVisibleSaveDialog\)\)/);
   assert.match(script, /function FindExactNameInProcess/);
@@ -85,13 +88,15 @@ test('查看器兼容五缩略图和当前大图加四缩略图两种布局', ()
   assert.match(script, /function ThumbnailPointIsClear/);
   assert.match(script, /AutomationElement\]::FromPoint/);
   assert.match(script, /function EnsureThumbnailPointIsClear/);
+  assert.match(script, /if\(FindVisibleSaveDialog\)\{/);
   assert.match(script, /if\(-not \(EnsureThumbnailPointIsClear \$thumb\.element\)\)\{continue\}/);
   assert.match(script, /\^Open file\$\|\^Show in folder\$/);
   assert.match(script, /AddSeconds\(4\)/);
   assert.match(script, /\$edgePids -contains \$el\.Current\.ProcessId/);
   assert.match(saveAction, /CloseDownloadsFlyoutIfOpen/);
+  assert.match(saveAction, /CloseVisibleSaveDialogs\|Out-Null/);
   assert.match(saveAction, /\$lastSaveError=\$_\.Exception\.Message/);
-  assert.match(saveAction, /FindVisibleSaveDialog/);
+  assert.match(saveAction, /CloseVisibleSaveDialogs/);
   assert.match(saveAction, /Save image as failed for thumbnail \$slot after 3 attempts\. Last error/);
   assert.match(script, /index=\$slot;file=\$savedFile/);
   assert.match(saveAction, /while\(\$true\).*if\(-not \$existing\.Count\)\{break\};\$number\+\+/s);
