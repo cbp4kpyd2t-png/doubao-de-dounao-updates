@@ -6,6 +6,7 @@ $OutputEncoding=$utf8Output
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -198,6 +199,61 @@ function GetSelectedThumbnailIndex($thumbs){
   }
   if($thumbs.Count -gt 0){return @{index=0;assumed=$true}}
   return @{index=-1;assumed=$false}
+}
+function GetImageRegionFingerprint($main){
+  try{
+    $r=$main.rect
+    $x=[Math]::Max(0,[int]$r.X);$y=[Math]::Max(0,[int]$r.Y)
+    $width=[Math]::Max(1,[Math]::Min(320,[int]$r.Width));$height=[Math]::Max(1,[Math]::Min(320,[int]$r.Height))
+    $sourceWidth=[Math]::Max(1,[int]$r.Width);$sourceHeight=[Math]::Max(1,[int]$r.Height)
+    $source=New-Object Drawing.Bitmap $sourceWidth,$sourceHeight
+    $graphics=[Drawing.Graphics]::FromImage($source)
+    $graphics.CopyFromScreen($x,$y,0,0,$source.Size)
+    $graphics.Dispose()
+    $sample=New-Object Drawing.Bitmap $width,$height
+    $sampleGraphics=[Drawing.Graphics]::FromImage($sample)
+    $sampleGraphics.DrawImage($source,0,0,$width,$height)
+    $sampleGraphics.Dispose();$source.Dispose()
+    $stream=New-Object IO.MemoryStream
+    $sample.Save($stream,[Drawing.Imaging.ImageFormat]::Png);$sample.Dispose()
+    $sha=[Security.Cryptography.SHA256]::Create()
+    $hash=[BitConverter]::ToString($sha.ComputeHash($stream.ToArray())).Replace('-','').ToLowerInvariant()
+    $sha.Dispose();$stream.Dispose()
+    return $hash
+  }catch{return $null}
+}
+function WaitForViewerAfterSave($minimumThumbs=0){
+  FocusEdge|Out-Null
+  $deadline=[DateTime]::UtcNow.AddSeconds(8);$best=$null
+  while([DateTime]::UtcNow -lt $deadline){
+    $main=FindGeneratedMainImage $false
+    if(-not $main){$main=FindGeneratedMainImage $true}
+    if($main){
+      $thumbs=@(FindViewerThumbnails $main)
+      if($thumbs.Count -ge $minimumThumbs){return @{main=$main;thumbs=$thumbs}}
+      $best=@{main=$main;thumbs=$thumbs}
+    }
+    Start-Sleep -Milliseconds 400
+  }
+  return $best
+}
+function SelectViewerThumbnail($thumbIndex,$previousFingerprint){
+  for($attempt=1;$attempt -le 3;$attempt++){
+    $viewer=WaitForViewerAfterSave 1
+    if(-not $viewer -or $thumbIndex -ge $viewer.thumbs.Count){continue}
+    $thumb=$viewer.thumbs[$thumbIndex]
+    if($thumb.offscreen){ScrollElementIntoView $thumb.element|Out-Null;$viewer=WaitForViewerAfterSave 1;if(-not $viewer -or $thumbIndex -ge $viewer.thumbs.Count){continue};$thumb=$viewer.thumbs[$thumbIndex]}
+    if($attempt -eq 2){InvokeElement $thumb.element|Out-Null}else{ClickElement $thumb.element|Out-Null}
+    $deadline=[DateTime]::UtcNow.AddSeconds(8)
+    while([DateTime]::UtcNow -lt $deadline){
+      Start-Sleep -Milliseconds 400
+      $main=FindGeneratedMainImage $false
+      if(-not $main){continue}
+      $fingerprint=GetImageRegionFingerprint $main
+      if(-not $previousFingerprint -or ($fingerprint -and $fingerprint -ne $previousFingerprint)){return @{main=$main;fingerprint=$fingerprint}}
+    }
+  }
+  return $null
 }
 function SubmitSavePath($targetBase){
   $desktop=[Windows.Automation.AutomationElement]::RootElement; $dialog=$null
@@ -417,25 +473,28 @@ if($Action -eq 'recover-save-ui'){
   Result @{ok=$true;url=$target}
 }
 if($Action -eq 'save-viewer-images'){
-  [Windows.Forms.SendKeys]::SendWait('{ESC}')
   $initialMain=WaitForGeneratedMainImage 45
   if(-not $initialMain){throw 'Image viewer main image was not found after waiting 45 seconds'}
   $needed=[int]$payload.needed; $startNumber=[int]$payload.startNumber; $targetDir=[string]$payload.targetDir; $fileStem=[string]$payload.fileStem; $already=@($payload.processedIndexes|ForEach-Object{[int]$_}); $saved=@()
-  $initialThumbs=FindViewerThumbnails $initialMain;$selectedInfo=GetSelectedThumbnailIndex $initialThumbs;$selectedThumbIndex=[int]$selectedInfo.index;$thumbnailSequence=@();for($i=0;$i -lt $initialThumbs.Count;$i++){if($i -ne $selectedThumbIndex){$thumbnailSequence+=$i}};$candidateTotal=[Math]::Min(5,1+$thumbnailSequence.Count)
+  $initialThumbs=@(FindViewerThumbnails $initialMain);$selectedInfo=GetSelectedThumbnailIndex $initialThumbs;$selectedThumbIndex=[int]$selectedInfo.index
+  # ChatGPT currently has two viewer layouts. Some machines expose all five thumbnails;
+  # others expose only the four alternatives beside the current large image.
+  $thumbnailSequence=@()
+  if($initialThumbs.Count -ge 5){for($i=0;$i -lt 5;$i++){$thumbnailSequence+=$i}}
+  else{$thumbnailSequence+=-1;for($i=0;$i -lt $initialThumbs.Count;$i++){$thumbnailSequence+=$i}}
+  $candidateTotal=[Math]::Min(5,$thumbnailSequence.Count);$previousFingerprint=$null
   for($slot=0;$slot -lt $candidateTotal;$slot++){
-    $main=FindGeneratedMainImage $false
-    if(-not $main){$main=FindGeneratedMainImage $true}
-    if(-not $main){throw "Image viewer main image was not found for thumbnail $slot after 3 attempts"}
-    $thumbs=FindViewerThumbnails $main
     $total=$candidateTotal; if($already -contains $slot){continue}
-    if($slot -gt 0){
-      $thumbIndex=[int]$thumbnailSequence[$slot-1]
-      if($thumbIndex -ge $thumbs.Count){break}
-      if($thumbs[$thumbIndex].offscreen){ScrollElementIntoView $thumbs[$thumbIndex].element|Out-Null;Start-Sleep -Milliseconds 800;$main=FindGeneratedMainImage $false;if($main){$thumbs=FindViewerThumbnails $main}}
-      if($thumbIndex -ge $thumbs.Count){throw "Thumbnail $thumbIndex disappeared while scrolling into view"}
-      ClickElement $thumbs[$thumbIndex].element|Out-Null; Start-Sleep -Milliseconds 1500
+    $thumbIndex=[int]$thumbnailSequence[$slot]
+    if($thumbIndex -ge 0){
+      $selected=SelectViewerThumbnail $thumbIndex $previousFingerprint
+      if(-not $selected){throw "Main image did not change after selecting thumbnail $thumbIndex"}
+      $main=$selected.main;$previousFingerprint=$selected.fingerprint
+    }else{
+      $viewer=WaitForViewerAfterSave 0
+      if(-not $viewer -or -not $viewer.main){throw "Image viewer main image was not found for thumbnail $slot after 3 attempts"}
+      $main=$viewer.main;$previousFingerprint=GetImageRegionFingerprint $main
     }
-    if($slot -gt 0){$main=FindGeneratedMainImage $false;if(-not $main){$main=FindGeneratedMainImage $true};if(-not $main){throw "Main image did not stabilize after selecting thumbnail $thumbIndex"}}
     $number=$startNumber
     while($true){$baseName="{0}_{1}" -f $fileStem,$number.ToString('000');$existing=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$_.BaseName -eq $baseName});if(-not $existing.Count){break};$number++}
     $before=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|ForEach-Object{$_.FullName})
@@ -453,7 +512,12 @@ if($Action -eq 'save-viewer-images'){
       try{SubmitSavePath (Join-Path $targetDir $baseName);$submitted=$true}catch{if($_.Exception.Message -notmatch 'Save As dialog was not found'){throw};[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 400}
     }
     if(-not $submitted){throw "Save image as failed for thumbnail $slot after 3 attempts"}
-    $savedFile=$null;for($i=0;$i -lt 60;$i++){Start-Sleep -Milliseconds 500;$new=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$before -notcontains $_.FullName -and $_.BaseName -eq $baseName -and $_.Extension -ne '.crdownload'});if($new.Count){$savedFile=$new[0].FullName;break}};if(-not $savedFile){throw "Saved file did not appear for thumbnail $slot"};[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 600;$saved+=@{index=$slot;file=$savedFile;total=$total}
+    $savedFile=$null;for($i=0;$i -lt 60;$i++){Start-Sleep -Milliseconds 500;$new=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$before -notcontains $_.FullName -and $_.BaseName -eq $baseName -and $_.Extension -ne '.crdownload'});if($new.Count){$savedFile=$new[0].FullName;break}};if(-not $savedFile){throw "Saved file did not appear for thumbnail $slot"}
+    # Do not press Escape here: depending on Edge/Windows version it can close the
+    # image viewer itself, leaving only the first image available on the next pass.
+    $viewerAfterSave=WaitForViewerAfterSave 0
+    if($slot -lt ($candidateTotal-1) -and (-not $viewerAfterSave -or -not $viewerAfterSave.main)){throw "Image viewer closed after saving thumbnail $slot"}
+    Start-Sleep -Milliseconds 400;$saved+=@{index=$slot;file=$savedFile;total=$total}
   }
   if($saved.Count){$totalResult=$saved[0].total}else{$totalResult=$candidateTotal}; Result @{saved=$saved;total=$totalResult;selectedThumbnailIndex=$selectedThumbIndex;selectedThumbnailAssumed=[bool]$selectedInfo.assumed}
 }

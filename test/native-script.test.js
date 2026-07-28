@@ -36,7 +36,7 @@ test('另存为流程使用窗口控件而非Alt+N快捷键', () => {
   assert.doesNotMatch(saveAction, /InvokeElement \$menuTarget/);
 });
 
-test('查看器保存当前大图一次并跳过对应的选中缩略图', () => {
+test('查看器兼容五缩略图和当前大图加四缩略图两种布局', () => {
   const saveAction = script.slice(script.indexOf("if($Action -eq 'save-viewer-images')"));
   assert.match(script, /Sort-Object \{\$_\.rect\.Y\}/);
   assert.match(script, /\$el\.Current\.Name -notmatch "generated image\|\^\$generatedImagePrefix"/);
@@ -45,7 +45,7 @@ test('查看器保存当前大图一次并跳过对应的选中缩略图', () =>
   assert.match(script, /function WaitForGeneratedMainImage/);
   assert.match(script, /function FindViewerThumbnails/);
   assert.match(saveAction, /WaitForGeneratedMainImage 45/);
-  assert.match(saveAction, /FindViewerThumbnails \$main/);
+  assert.match(saveAction, /FindViewerThumbnails \$initialMain/);
   assert.match(script, /generated image\|\^\$generatedImagePrefix/);
   assert.match(script, /\$mainRect\.Y\+\$mainRect\.Height\+800/);
   assert.match(script, /function GetSelectedThumbnailIndex/);
@@ -53,16 +53,21 @@ test('查看器保存当前大图一次并跳过对应的选中缩略图', () =>
   assert.match(script, /HasKeyboardFocus/);
   assert.match(script, /if\(\$thumbs\.Count -gt 0\)\{return @\{index=0;assumed=\$true\}\}/);
   assert.match(saveAction, /\$thumbnailSequence=@\(\)/);
-  assert.match(saveAction, /if\(\$i -ne \$selectedThumbIndex\)/);
-  assert.match(saveAction, /\$candidateTotal=\[Math\]::Min\(5,1\+\$thumbnailSequence\.Count\)/);
-  assert.match(saveAction, /if\(\$slot -gt 0\)/);
-  assert.match(saveAction, /\$thumbIndex=\[int\]\$thumbnailSequence\[\$slot-1\]/);
-  assert.match(saveAction, /ScrollElementIntoView \$thumbs\[\$thumbIndex\]\.element/);
-  assert.match(saveAction, /Main image did not stabilize after selecting thumbnail/);
+  assert.match(saveAction, /if\(\$initialThumbs\.Count -ge 5\)/);
+  assert.match(saveAction, /else\{\$thumbnailSequence\+=-1/);
+  assert.match(saveAction, /\$candidateTotal=\[Math\]::Min\(5,\$thumbnailSequence\.Count\)/);
+  assert.match(saveAction, /\$thumbIndex=\[int\]\$thumbnailSequence\[\$slot\]/);
+  assert.match(script, /function SelectViewerThumbnail/);
+  assert.match(script, /ScrollElementIntoView \$thumb\.element/);
+  assert.match(saveAction, /Main image did not change after selecting thumbnail/);
+  assert.match(script, /function GetImageRegionFingerprint/);
+  assert.match(script, /CopyFromScreen/);
   assert.match(saveAction, /\$menuAttempt=0;\$menuAttempt -lt 3/);
   assert.match(saveAction, /FindExactNameNearPoint/);
   assert.match(saveAction, /after 3 attempts/);
-  assert.match(saveAction, /if\(-not \$savedFile\).*SendWait\('\{ESC\}'\)/);
+  assert.doesNotMatch(saveAction, /if\(-not \$savedFile\).*SendWait\('\{ESC\}'\)/);
+  assert.match(saveAction, /WaitForViewerAfterSave 0/);
+  assert.match(saveAction, /Image viewer closed after saving thumbnail/);
   assert.match(script, /index=\$slot;file=\$savedFile/);
   assert.match(saveAction, /while\(\$true\).*if\(-not \$existing\.Count\)\{break\};\$number\+\+/s);
   assert.doesNotMatch(saveAction, /if\(\$existing\.Count\)\{\$saved\+=/);
@@ -79,7 +84,7 @@ test('每次上传前验证新对话没有旧附件', () => {
 });
 
 test('页面检查提供卡死监控需要的关键计数', () => {
-  const inspect = script.slice(script.indexOf("if($Action -eq 'inspect')"), script.indexOf("FocusEdge|Out-Null"));
+  const inspect = script.slice(script.indexOf("if($Action -eq 'inspect')"), script.indexOf("if($Action -eq 'get-current-chat-url')"));
   assert.match(inspect, /generatedCount/); assert.match(inspect, /attachmentCount/); assert.match(inspect, /submitEnabled/);
   assert.match(inspect, /ControlType\.ProgrammaticName -match 'Button\|Image'/);
 });
