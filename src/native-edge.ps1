@@ -351,6 +351,50 @@ function FindVisibleSaveDialog(){
   }
   return $null
 }
+function FindSaveFileNameField($dialog){
+  foreach($automationId in @('1001','1148')){
+    $candidate=FindVisibleByAutomationId $dialog $automationId
+    if($candidate){
+      if($candidate.Current.ControlType.ProgrammaticName -match 'Edit'){return $candidate}
+      foreach($child in (All $candidate)){
+        try{if(-not $child.Current.IsOffscreen -and $child.Current.IsEnabled -and $child.Current.ControlType.ProgrammaticName -match 'Edit'){return $child}}catch{}
+      }
+    }
+  }
+  $dialogRect=$dialog.Current.BoundingRectangle;$candidates=@()
+  foreach($candidate in (All $dialog)){
+    try{
+      $rect=$candidate.Current.BoundingRectangle
+      if(-not $candidate.Current.IsOffscreen -and $candidate.Current.IsEnabled -and $candidate.Current.ControlType.ProgrammaticName -match 'Edit' -and $rect.Width -ge 180 -and $rect.Height -ge 18 -and $rect.Y -gt ($dialogRect.Y+$dialogRect.Height*0.55)){
+        $candidates+=@{element=$candidate;rect=$rect}
+      }
+    }catch{}
+  }
+  if($candidates.Count){return ($candidates|Sort-Object {$_.rect.Y} -Descending|Select-Object -First 1).element}
+  return $null
+}
+function ReadElementValue($element){
+  try{return [string]$element.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value}catch{}
+  try{return [string]$element.Current.Name}catch{}
+  return ''
+}
+function WriteAndVerifySavePath($fileName,$targetBase){
+  for($attempt=1;$attempt -le 3;$attempt++){
+    try{$fileName.SetFocus()}catch{ClickElement $fileName|Out-Null}
+    Start-Sleep -Milliseconds 200
+    if($attempt -eq 1){
+      try{$value=$fileName.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern);$value.SetValue($targetBase)}catch{}
+    }else{
+      SetClipboardText $targetBase
+      [Windows.Forms.SendKeys]::SendWait('^a')
+      [Windows.Forms.SendKeys]::SendWait('^v')
+    }
+    Start-Sleep -Milliseconds 350
+    $actual=(ReadElementValue $fileName).Trim()
+    if($actual -eq $targetBase){return @{ok=$true;actual=$actual;attempt=$attempt}}
+  }
+  return @{ok=$false;actual=(ReadElementValue $fileName);attempt=3}
+}
 function SubmitSavePath($targetBase){
   $desktop=[Windows.Automation.AutomationElement]::RootElement; $dialog=$null
   for($i=0;$i -lt 20;$i++){ $dialog=FindByName $desktop "Save As|^$saveAsWord$" 'Window'; if($dialog){break}; Start-Sleep -Milliseconds 250 }
@@ -358,16 +402,21 @@ function SubmitSavePath($targetBase){
   $targetDir=[IO.Path]::GetDirectoryName($targetBase)
   if(-not (Test-Path -LiteralPath $targetDir -PathType Container)){throw "Save target directory does not exist: $targetDir"}
   try{$dialog.SetFocus()}catch{[NativeWindow]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle)|Out-Null}; Start-Sleep -Milliseconds 300
-  $fileName=FindNativeControl $dialog '1001' '^Edit$'
-  if(-not $fileName){$fileName=FindVisibleByAutomationId $dialog '1148'}
+  $fileName=FindSaveFileNameField $dialog
   if(-not $fileName){throw 'Save As file name field was not found'}
-  try{$fileName.SetFocus()}catch{ClickElement $fileName|Out-Null};Start-Sleep -Milliseconds 200
-  try{$value=$fileName.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern);$value.SetValue($targetBase)}catch{SetClipboardText $targetBase;[Windows.Forms.SendKeys]::SendWait('^a');[Windows.Forms.SendKeys]::SendWait('^v')};Start-Sleep -Milliseconds 350
+  $pathWrite=WriteAndVerifySavePath $fileName $targetBase
+  if(-not $pathWrite.ok){throw "Save As file name field did not accept the full target path. Expected: $targetBase; Actual: $($pathWrite.actual)"}
   $save=FindNativeControl $dialog '1' '^Button$'
-  if(-not $save){$save=FindByName $dialog "^Save$|^$saveWord$" 'Button'}
-  if(-not $save){throw "Save As save button was not found for target: $targetBase"}
+  if(-not $save){$save=FindByName $dialog "^Save$|^$saveWord$|^Open$|^$openWord$" 'Button'}
+  if(-not $save){throw "Save As submit button was not found for target: $targetBase"}
+  $submitButtonName=$save.Current.Name
   $dialogClosed=$false
   for($attempt=1;$attempt -le 3 -and -not $dialogClosed;$attempt++){
+    $actual=(ReadElementValue $fileName).Trim()
+    if($actual -ne $targetBase){
+      $pathWrite=WriteAndVerifySavePath $fileName $targetBase
+      if(-not $pathWrite.ok){continue}
+    }
     if($attempt -eq 1){InvokeElement $save|Out-Null}
     elseif($attempt -eq 2){try{$fileName.SetFocus()}catch{};Start-Sleep -Milliseconds 150;[Windows.Forms.SendKeys]::SendWait('{ENTER}')}
     else{ClickElement $save|Out-Null}
@@ -383,7 +432,7 @@ function SubmitSavePath($targetBase){
     }
   }
   if(-not $dialogClosed -and (FindSavedTargetFile $targetBase)){$dialogClosed=$true}
-  if(-not $dialogClosed){throw "Save As dialog remained open and no saved file appeared after Invoke, Enter and mouse click for target: $targetBase"}
+  if(-not $dialogClosed){throw "Save As dialog remained open for 15 seconds and no saved file appeared. Target: $targetBase; Field: $(ReadElementValue $fileName); Button: $submitButtonName"}
 }
 
 $loginWord=([char]0x767b)+([char]0x5f55)
@@ -637,9 +686,14 @@ if($Action -eq 'save-viewer-images'){
       for($i=0;$i -lt 20;$i++){$saveAs=FindExactNameNearPoint $desktop $saveNames $clickX $clickY $edgeRect;if(-not $saveAs){$saveAs=FindExactNameInProcess $desktop $saveNames 'msedge'};if($saveAs){break};Start-Sleep -Milliseconds 150}
       if(-not $saveAs){continue}
       ClickElement $saveAs|Out-Null; Start-Sleep -Milliseconds 700
-      try{SubmitSavePath (Join-Path $targetDir $baseName);$submitted=$true}catch{if($_.Exception.Message -notmatch 'Save As dialog was not found'){throw};[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 400}
+      try{SubmitSavePath (Join-Path $targetDir $baseName);$submitted=$true}catch{
+        $lastSaveError=$_.Exception.Message
+        for($escapeAttempt=0;$escapeAttempt -lt 3;$escapeAttempt++){if(-not (FindVisibleSaveDialog)){break};[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 350}
+        FocusEdge|Out-Null
+        Start-Sleep -Milliseconds 500
+      }
     }
-    if(-not $submitted){throw "Save image as failed for thumbnail $slot after 3 attempts"}
+    if(-not $submitted){throw "Save image as failed for thumbnail $slot after 3 attempts. Last error: $lastSaveError"}
     $savedFile=$null;for($i=0;$i -lt 60;$i++){Start-Sleep -Milliseconds 500;$new=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$before -notcontains $_.FullName -and $_.BaseName -eq $baseName -and $_.Extension -ne '.crdownload'});if($new.Count){$savedFile=$new[0].FullName;break}};if(-not $savedFile){throw "Saved file did not appear for thumbnail $slot"}
     # Do not press Escape here: depending on Edge/Windows version it can close the
     # image viewer itself, leaving only the first image available on the next pass.
