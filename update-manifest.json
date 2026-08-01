@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.5",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.5/doubao-de-dounao-1.4.5-win-x64.zip",
-    "sha256":  "afc9e952566173c6fa3ca95adc90cfac3e6599dafe0cf14d4a9708b35bc33adb",
-    "notes":  "Shortens the full five-image prompt, removes conflicting creative fields, varies each scene and action, and rebuilds stale generic product names.",
-    "publishedAt":  "2026-08-01T12:50:56.7841417Z"
+    "version":  "1.4.6",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.6/doubao-de-dounao-1.4.6-win-x64.zip",
+    "sha256":  "f2816b8a0100fa29c08e85e221ebdc16c832d7750d835163f35a2d58d1b600f0",
+    "notes":  "Adds an L063 manual-prompt-only mode that sends only the user-authored prompt and bypasses product facts, AI analysis, and DouNao configuration.",
+    "publishedAt":  "2026-08-01T14:32:25.9499825Z"
 }
