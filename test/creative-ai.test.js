@@ -84,6 +84,8 @@ test('three prompts use independent roles and strict structured boundaries', () 
     assert.match(prompt, new RegExp(BEGIN_MARKER));
     assert.match(prompt, new RegExp(END_MARKER));
     assert.match(prompt, /只输出一个JSON对象/);
+    assert.doesNotMatch(prompt, /"appearanceFacts"/);
+    assert.match(prompt, /"summary"/);
   }
 });
 

@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
+const { compactFactsPrompt } = require('./creative-engine');
 
 const AI_ANALYSIS_FILE = 'AI产品分析.json';
 const AI_BANK_FILE = '差异化词库.json';
@@ -110,17 +111,7 @@ function parseMarkedJson(text) {
 }
 
 function factsForAi(facts) {
-  return {
-    productId: facts.productId,
-    productName: facts.productName,
-    identityAnchor: facts.identityAnchor,
-    quantity: facts.quantity,
-    appearanceFacts: facts.appearanceFacts,
-    requiredElements: facts.requiredElements,
-    forbiddenChanges: facts.forbiddenChanges,
-    confirmedSellingPoints: facts.confirmedSellingPoints,
-    customRequirements: facts.customRequirements,
-  };
+  return { summary: compactFactsPrompt(facts) };
 }
 
 function outputRule(schemaDescription) {

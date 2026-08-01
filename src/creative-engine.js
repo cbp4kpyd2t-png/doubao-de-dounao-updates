@@ -65,6 +65,54 @@ function unique(values) { return [...new Set(values.filter(Boolean).map((value) 
 function choose(values, index, fallback) { return values.length ? values[index % values.length] : fallback; }
 function profileFor(name) { return PROFILE_RULES.find((profile) => profile.match.test(name)) || { scenes: LUXURY_SCENES, actions: ['人物正在真实使用商品', '人物在商品旁展示', '用手操作商品', '把商品放入真实环境', '人物完成使用后欣赏效果'], props: ['高级家具、艺术装饰和生活用品', '宠物、绿植和丰富生活道具'], benefits: ['用途表达直观', '融入真实生活场景', '商品完整醒目'] }; }
 
+const COMPACT_FACTS_MAX_LENGTH = 110;
+
+function cleanFactFragment(value) {
+  return String(value || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[【\[]?[^：:]{1,10}[：:]\s*/, '')
+    .replace(/[。；;，,\s]+$/g, '')
+    .trim();
+}
+
+function compactFactsPrompt(facts, maxLength = COMPACT_FACTS_MAX_LENGTH) {
+  const limit = Math.max(80, Number(maxLength) || COMPACT_FACTS_MAX_LENGTH);
+  const name = cleanFactFragment(facts?.productName || '商品').slice(0, 24);
+  const prefix = `商品：${name}；全部参考图为唯一身份锚点`;
+  const suffix = '；禁改形色材质、结构数量与比例，不增功能配件，主体完整突出';
+  const candidates = [];
+  if (facts?.quantity) candidates.push({ value: `数量${facts.quantity}`, score: 100 });
+  for (const value of facts?.customRequirements ? [facts.customRequirements] : []) candidates.push({ value, score: 90 });
+  for (const value of facts?.requiredElements || []) candidates.push({ value, score: 80 });
+  for (const value of facts?.appearanceFacts || []) candidates.push({ value, score: 60 });
+  const ranked = unique(candidates.map((item) => cleanFactFragment(item.value)))
+    .map((value) => {
+      const original = candidates.find((item) => cleanFactFragment(item.value) === value);
+      let score = original?.score || 0;
+      if (/(必须|禁止|不得|只能|不能)/.test(value)) score += 20;
+      if (/(尺寸|厘米|cm|mm|长|宽|高|厚|比例|\d)/i.test(value)) score += 15;
+      if (/(材质|颜色|结构|孔|层|把手|支撑|抽拉|数量)/.test(value)) score += 10;
+      return { value, score };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  let summary = prefix;
+  if (ranked.length) summary += '；关键：';
+  for (const item of ranked) {
+    const separator = summary.endsWith('：') ? '' : '；';
+    const remaining = limit - suffix.length - summary.length - separator.length;
+    if (remaining <= 4) break;
+    if (item.value.length <= remaining) summary += `${separator}${item.value}`;
+    else {
+      summary += `${separator}${item.value.slice(0, Math.max(1, remaining - 1))}…`;
+      break;
+    }
+  }
+  if (summary.endsWith('关键：')) summary = summary.slice(0, -3);
+  return `${summary}${suffix}`.slice(0, limit);
+}
+
 function chineseNumber(value) {
   if (/^\d+$/.test(value)) return Number(value);
   const map = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 百: 100 };
@@ -231,17 +279,7 @@ function buildCreativePlan(facts, options = {}) {
 }
 
 function factsPrompt(facts) {
-  const lines = [
-    `商品名称：${facts.productName}`, `身份锚点：${facts.identityAnchor}`,
-    facts.quantity ? `确认数量：${facts.quantity}` : '数量：如TXT存在冲突或未确认，严格按照参考图，不主动增加、删除或声明数量',
-    facts.appearanceFacts.length ? `已确认外观事实：${facts.appearanceFacts.join('；')}` : '',
-    facts.requiredElements.length ? `必须保留：${facts.requiredElements.join('；')}` : '',
-    facts.confirmedSellingPoints.length ? `可表现卖点：${facts.confirmedSellingPoints.join('；')}` : '',
-    `禁止改变：${facts.forbiddenChanges.join('；')}`,
-    facts.creativePreferences.length ? `创意偏好：${facts.creativePreferences.join('；')}` : '',
-    facts.customRequirements ? `用户补充创意要求：${facts.customRequirements}` : '',
-  ];
-  return lines.filter(Boolean).join('\n');
+  return compactFactsPrompt(facts);
 }
 
 function taskPrompt(task) {
@@ -324,4 +362,4 @@ async function prepareProductCreativeFiles(product, options = {}) {
   return { configDir, fingerprint, sourceChanged, facts, plan };
 }
 
-module.exports = { CREATIVE_ENGINE_VERSION, CONFIG_DIR_NAME, CUSTOM_REQUIREMENTS_FILE, FIXED_FIVE_IMAGE_PROMPT, normalizeProductName, quantityCandidates, extractProductFacts, buildCreativePlan, buildRoundPrompt, prepareProductCreativeFiles, sourceFingerprint };
+module.exports = { CREATIVE_ENGINE_VERSION, CONFIG_DIR_NAME, CUSTOM_REQUIREMENTS_FILE, FIXED_FIVE_IMAGE_PROMPT, COMPACT_FACTS_MAX_LENGTH, normalizeProductName, quantityCandidates, extractProductFacts, compactFactsPrompt, buildCreativePlan, buildRoundPrompt, prepareProductCreativeFiles, sourceFingerprint };

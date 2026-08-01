@@ -8,10 +8,29 @@ const crypto = require('node:crypto');
 const {
   CONFIG_DIR_NAME,
   FIXED_FIVE_IMAGE_PROMPT,
+  COMPACT_FACTS_MAX_LENGTH,
+  compactFactsPrompt,
   buildCreativePlan,
   buildRoundPrompt,
   prepareProductCreativeFiles,
 } = require('../src/creative-engine');
+
+test('商品事实压缩为约100字并优先保留关键尺寸和禁错信息', () => {
+  const summary = compactFactsPrompt({
+    productName: '测试双层置物架',
+    quantity: 2,
+    customRequirements: '实际尺寸37×25×33厘米，黑色金属双层结构，下层可以向前抽拉，支撑脚必须贴合台面',
+    requiredElements: ['必须保留下层抽拉篮和四个支撑脚', '不得悬空或生成落地柜'],
+    appearanceFacts: ['黑色金属材质', '双层网格篮结构', '人物比例必须符合实际尺寸'],
+  });
+  assert.ok(summary.length >= 80);
+  assert.ok(summary.length <= COMPACT_FACTS_MAX_LENGTH);
+  assert.match(summary, /测试双层置物架/);
+  assert.match(summary, /唯一身份锚点/);
+  assert.match(summary, /37×25×33厘米/);
+  assert.match(summary, /禁改/);
+  assert.match(summary, /主体完整突出/);
+});
 
 async function fixture(name = 'L043叠衣板主图', text = '这是叠衣板，15个一组。另一处写30个一组。严格以已上传的置物架参考图为准。') {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dou-nao-creative-'));
