@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Compresses product facts to an approximately 100-character key summary while preserving dimensions, structure and critical error-prevention rules.'
+  notes = 'Shortens the full five-image prompt, removes conflicting creative fields, varies each scene and action, and rebuilds stale generic product names.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

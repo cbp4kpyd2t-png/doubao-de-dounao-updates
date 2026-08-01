@@ -3,31 +3,16 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const CREATIVE_ENGINE_VERSION = 2;
+const CREATIVE_ENGINE_VERSION = 3;
 const CONFIG_DIR_NAME = '豆脑配置';
 const CUSTOM_REQUIREMENTS_FILE = '创意要求.txt';
 
-const FIXED_FIVE_IMAGE_PROMPT = `【本轮强制输出规则】
-
-请严格依据已经上传的商品参考图，连续执行5次彼此独立的图像生成任务，并最终输出5张独立的1:1方形图片。
-
-必须真正生成5张图片，不能只生成1张，不能只描述5个方案，也不能等待用户再次催促后才继续生成。
-
-图片1、图片2、图片3、图片4、图片5必须分别作为5个独立图像结果输出。每次图像生成任务只输出1张图片，完成一张后立即继续执行下一次，直到5张全部生成完成。
-
-严禁生成五宫格、拼图、网格图、对比图、分镜图、画中画或一张包含多个方案的图片。
-
-如果上传的参考图中包含3×2多角度合成参考图，它只用于识别同一商品的六个观察角度与结构细节，绝不代表输出排版；最终仍必须输出5张彼此独立的单场景图片，禁止照抄参考图的网格布局。
-
-本轮5张图片必须采用5种明显不同且未使用过的商品摆放方向、摄影机位置、俯仰高度、构图距离和人物位置；不能只更换背景、服装、裁切或轻微倾斜画面。
-
-5张图片都必须能够独立作为Temu商品主图：商品完整、清晰、醒目，是画面的第一视觉主体，一眼能够识别。人物、动物、家具和装饰道具可以丰富，但不能遮挡或弱化商品。
-
-严格保持参考商品的形状、颜色、材质、结构、部件数量、尺寸比例和关键细节，不得重新设计、增加、删除或替换商品结构。
-
-不要添加可读文字、Logo、水印、价格、促销徽章、边框或平台界面元素。
-
-再次确认：本轮必须生成5张彼此独立的图片，不是一张包含5个方案的图片。`;
+const FIXED_FIVE_IMAGE_PROMPT = `【统一输出】
+严格依据参考图，依次生成5张独立的1:1图片；每次只输出1张，完成后自动继续，直至5张全部生成。
+禁止拼图、网格、五宫格、多视角合集或只描述方案。五张必须采用明显不同的角度与构图。
+每张商品都要完整清晰、尺寸合理并成为第一视觉主体；人物正脸可见，五张使用不同人脸，且不得遮挡商品。
+保持商品形状、颜色、材质、结构、部件数量、尺寸比例和关键细节；禁止增删功能或配件。
+禁止文字、Logo、水印、价格、徽章、边框和平台界面。`;
 
 const PERSON_TYPES = ['年轻女性', '年轻男性', '中年女性', '中年男性', '优雅女性', '成熟男性', '时尚女性', '休闲男性', '家庭主理人', '专业使用者'];
 const APPAREL = ['浅色高级家居服', '深色简约休闲装', '米白针织服装', '低饱和亚麻服装', '现代都市休闲装', '优雅轻奢服装', '自然户外服装', '整洁工作服', '柔和暖色服装', '高级黑白配服装'];
@@ -76,6 +61,13 @@ function cleanFactFragment(value) {
     .trim();
 }
 
+function splitFactFragments(value) {
+  return String(value || '')
+    .split(/[。；;\r\n]+/u)
+    .map((part) => cleanFactFragment(part).replace(/^\d+[.、]\s*/, ''))
+    .filter((part) => part && !/^【.*】$/.test(part));
+}
+
 function compactFactsPrompt(facts, maxLength = COMPACT_FACTS_MAX_LENGTH) {
   const limit = Math.max(80, Number(maxLength) || COMPACT_FACTS_MAX_LENGTH);
   const name = cleanFactFragment(facts?.productName || '商品').slice(0, 24);
@@ -83,9 +75,9 @@ function compactFactsPrompt(facts, maxLength = COMPACT_FACTS_MAX_LENGTH) {
   const suffix = '；禁改形色材质、结构数量与比例，不增功能配件，主体完整突出';
   const candidates = [];
   if (facts?.quantity) candidates.push({ value: `数量${facts.quantity}`, score: 100 });
-  for (const value of facts?.customRequirements ? [facts.customRequirements] : []) candidates.push({ value, score: 90 });
-  for (const value of facts?.requiredElements || []) candidates.push({ value, score: 80 });
-  for (const value of facts?.appearanceFacts || []) candidates.push({ value, score: 60 });
+  for (const value of splitFactFragments(facts?.customRequirements)) candidates.push({ value, score: 90 });
+  for (const source of facts?.requiredElements || []) for (const value of splitFactFragments(source)) candidates.push({ value, score: 80 });
+  for (const source of facts?.appearanceFacts || []) for (const value of splitFactFragments(source)) candidates.push({ value, score: 60 });
   const ranked = unique(candidates.map((item) => cleanFactFragment(item.value)))
     .map((value) => {
       const original = candidates.find((item) => cleanFactFragment(item.value) === value);
@@ -225,8 +217,8 @@ function personModeFor(index) {
   const slot = index % 5;
   if (slot < 2) return '人物正在真实使用商品，动作自然且不遮挡商品';
   if (slot === 2) return '人物位于商品侧面或后方，商品在前景完整突出';
-  if (slot === 3) return '仅手部或局部人物与商品互动，但完整商品必须同时出现';
-  return Math.floor(index / 5) % 2 === 0 ? '人物位于商品旁营造高级生活氛围，不能成为主角' : '本张不出现人物，以丰富豪华场景和道具形成差异化';
+  if (slot === 3) return '人物站在商品旁展示使用结果，不能遮挡商品';
+  return '人物位于商品后侧营造真实生活氛围，商品仍是主角';
 }
 
 function buildCreativePlan(facts, options = {}) {
@@ -259,10 +251,10 @@ function buildCreativePlan(facts, options = {}) {
       salesRole: choose(salesRoles, offset * 7 + slot, SALES_ROLES[slot % SALES_ROLES.length]),
       angle: buildAngle(index, cycle, creativeBank),
       personMode: personModeFor(index),
-      person: slot === 4 && round % 2 === 0 ? '无人物' : `${choose(people, offset * 3, '虚构人物')}，穿${choose(apparel, offset * 7, '高级日常服装')}`,
-      action: choose(actions, offset * 2 + slot, '自然使用商品'),
+      person: `${choose(people, index + cycle - 1, '虚构人物')}，正脸可见且与本轮其他图片不同`,
+      action: choose(actions, index + cycle - 1, '自然使用商品'),
       spatialRelation: choose(spatialRelations, offset * 11 + slot, ''),
-      scene: `${luxuryBase}中的${choose(scenes, offset * 3 + slot, '真实使用区域')}`,
+      scene: choose(scenes, index + cycle - 1, luxuryBase),
       props: choose(props, offset + round, '丰富高级生活道具'),
       lighting: choose(lighting, offset * 4 + slot, '通透商业光线'),
       colorPalette: choose(colors, offset * 13 + slot, ''),
@@ -284,13 +276,7 @@ function factsPrompt(facts) {
 
 function taskPrompt(task) {
   const a = task.angle;
-  const optional = [
-    task.spatialRelation ? `- 空间关系：${task.spatialRelation}` : '',
-    task.colorPalette ? `- 色彩关系：${task.colorPalette}` : '',
-    task.season || task.weather ? `- 季节与天气：${[task.season, task.weather].filter(Boolean).join('；')}` : '',
-    task.animal ? `- 可选动物元素：${task.animal}，不得遮挡或抢夺商品主体` : '',
-  ].filter(Boolean).join('\n');
-  return `图片${task.slot}（总计划第${task.imageNumber}张，角度编号${a.id}）：\n- 销售作用：${task.salesRole}\n- 商品与镜头：商品${a.productOrientation}；摄影机位于${a.cameraDirection}；${a.elevation}；${a.distance}；${a.placement}\n- 人物：${task.person}；${task.personMode}\n- 动作：${task.action}\n- 场景：${task.scene}\n${optional ? `${optional}\n` : ''}- 光线与道具：${task.lighting}；可加入${task.props}\n- 本张卖点：${task.sellingPoint}\n- 主图底线：${task.mainImageRule}`;
+  return `图片${task.slot}：\n- 镜头：商品${a.productOrientation}；${a.cameraDirection}；${a.elevation}；${a.distance}\n- 场景动作：${task.scene}；${task.person}；${task.action}\n- 卖点：${task.sellingPoint}\n- 要求：${task.personMode}；商品完整醒目、比例真实、不可遮挡`;
 }
 
 function angleLockPrompt(referenceSelection) {
@@ -298,12 +284,9 @@ function angleLockPrompt(referenceSelection) {
   if (!referenceSelection?.selectedRootContactSheet || positions.length !== 5) return '';
   const color = referenceSelection.selectedColorLabel || '当前参考图颜色';
   return [
-    '【本轮单角度锁定规则（优先于创意镜头描述）】',
-    `本轮上传的六角度合成参考图对应“${color}”版本；本轮5张只能使用这一颜色，不得混入其他颜色。`,
-    '合成图按左上、上中、右上、左下、下中、右下共6个独立观察角度排列。它们是同一件商品，不是六个商品。',
-    ...positions.map((position, index) => `图片${index + 1}：只锁定合成图“${position}”的商品朝向、透视和部件相对位置。`),
-    '每张图只能采用为它指定的一个角度，禁止平均、融合、镜像或拼接其他角度。其他小图只用于核对被遮挡的真实结构，不能把其他视角中的部件重复添加到目标角度。',
-    '创意计划中的摄影机位只允许在锁定角度附近自然取景；如果与锁定角度冲突，以本段角度锁定规则为准。'
+    '【角度锁定（优先）】',
+    `本轮仅使用“${color}”版本。图片1至5依次锁定合成图的${positions.join('、')}视角。`,
+    '每张只采用指定视角；禁止融合、镜像、拼接或重复其他视角。其他参考图只用于核对真实结构。'
   ].join('\n');
 }
 
@@ -349,7 +332,8 @@ async function prepareProductCreativeFiles(product, options = {}) {
   const fingerprintFile = path.join(configDir, '来源指纹.json');
   const previous = await readJson(fingerprintFile);
   let facts = await readJson(path.join(configDir, '商品事实.json'));
-  const sourceChanged = !previous || previous.sourceFingerprint !== fingerprint || !facts || facts.engineVersion !== CREATIVE_ENGINE_VERSION;
+  const currentProductName = normalizeProductName(product.name);
+  const sourceChanged = !previous || previous.sourceFingerprint !== fingerprint || !facts || facts.engineVersion !== CREATIVE_ENGINE_VERSION || facts.productName !== currentProductName;
   if (sourceChanged) {
     await archiveManagedFiles(configDir, previous?.sourceFingerprint);
     facts = await extractProductFacts(product, fingerprint);

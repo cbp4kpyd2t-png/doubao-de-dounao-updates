@@ -63,7 +63,7 @@ test('creative plan contains 50 unique composite angles and exactly five tasks p
   const plan = buildCreativePlan(facts, { cycle: 1 });
   assert.equal(plan.tasks.length, 50);
   assert.equal(new Set(plan.tasks.map((task) => JSON.stringify(task.angle))).size, 50);
-  assert.equal(plan.peopleTaskCount, 45);
+  assert.equal(plan.peopleTaskCount, 50);
   for (let round = 1; round <= 10; round += 1) assert.equal(plan.tasks.filter((task) => task.round === round).length, 5);
   assert.ok(plan.tasks.every((task) => task.mainImageRule.includes('Temu')));
 });
@@ -86,7 +86,8 @@ test('approved AI vocabulary changes scene, action and camera dimensions without
   assert.ok(plan.tasks.some((task) => task.angle.cameraDirection === '人物肩后越肩机位'));
   const prompt = buildRoundPrompt(facts, plan, 1);
   assert.ok(prompt.includes(FIXED_FIVE_IMAGE_PROMPT));
-  assert.match(prompt, /空间关系/);
+  assert.ok(new Set(plan.tasks.slice(0, 5).map((task) => task.scene)).size >= 2);
+  assert.ok(new Set(plan.tasks.slice(0, 5).map((task) => task.action)).size >= 2);
 });
 
 test('round prompt uses cleaned facts, five distinct tasks, and mandatory five-image wording', async () => {
@@ -97,10 +98,12 @@ test('round prompt uses cleaned facts, five distinct tasks, and mandatory five-i
   assert.match(prompt, /图片5/);
   assert.match(prompt, /第3轮/);
   assert.match(prompt, /整体采用暖金色调/);
-  assert.match(prompt, /必须真正生成5张图片/);
-  assert.match(prompt, /不是一张包含5个方案的图片/);
+  assert.match(prompt, /依次生成5张独立的1:1图片/);
+  assert.match(prompt, /禁止拼图、网格、五宫格/);
   assert.ok(prompt.includes(FIXED_FIVE_IMAGE_PROMPT));
-  assert.equal((prompt.match(/角度编号A/g) || []).length, 5);
+  assert.equal((prompt.match(/图片\d：/g) || []).length, 5);
+  assert.doesNotMatch(prompt, /季节与天气|可选动物元素|色彩关系|光线与道具|销售作用/);
+  assert.ok(prompt.length < 2600);
 });
 
 test('round prompt locks five outputs to five positions from one contact sheet', async () => {
@@ -111,10 +114,9 @@ test('round prompt locks five outputs to five positions from one contact sheet',
     selectedColorLabel: '粉色',
     lockedAnglePositions: ['左上', '上中', '右上', '左下', '下中'],
   });
-  assert.match(prompt, /本轮单角度锁定规则/);
-  assert.match(prompt, /图片1：只锁定合成图“左上”/);
-  assert.match(prompt, /图片5：只锁定合成图“下中”/);
-  assert.match(prompt, /禁止平均、融合、镜像或拼接其他角度/);
+  assert.match(prompt, /角度锁定（优先）/);
+  assert.match(prompt, /图片1至5依次锁定合成图的左上、上中、右上、左下、下中视角/);
+  assert.match(prompt, /禁止融合、镜像、拼接或重复其他视角/);
 });
 
 test('unchanged sources are reused; changed sources archive the previous managed version', async () => {
@@ -129,4 +131,17 @@ test('unchanged sources are reused; changed sources archive the previous managed
   assert.notEqual(third.fingerprint, first.fingerprint);
   const history = path.join(item.dir, CONFIG_DIR_NAME, '历史版本');
   assert.ok((await fsp.readdir(history)).length >= 1);
+});
+
+test('cached generic product name is rebuilt from the actual folder name', async () => {
+  const item = await fixture('L063健身板主图', '粉色健身板，完全展开约105×40厘米。');
+  const first = await prepareProductCreativeFiles(item.product, { cycle: 1 });
+  const factsFile = path.join(first.configDir, '商品事实.json');
+  const stale = JSON.parse(await fsp.readFile(factsFile, 'utf8'));
+  stale.productName = '商品';
+  await fsp.writeFile(factsFile, `${JSON.stringify(stale, null, 2)}\n`, 'utf8');
+  const rebuilt = await prepareProductCreativeFiles(item.product, { cycle: 1 });
+  assert.equal(rebuilt.sourceChanged, true);
+  assert.equal(rebuilt.facts.productName, '健身板');
+  assert.match(buildRoundPrompt(rebuilt.facts, rebuilt.plan, 1), /商品：健身板/);
 });
