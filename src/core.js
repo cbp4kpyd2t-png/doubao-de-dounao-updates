@@ -7,6 +7,11 @@ const sharp = require('sharp');
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const CSV_HEADER = ['run_id', 'job_id', 'product_id', 'variant', 'output_file', 'status', 'review_notes', 'prompt'];
 
+function usesManualPromptOnly(name) {
+  const value = String(name || '');
+  return /^L063(?:\D|$)/i.test(value) || value.includes('健身板');
+}
+
 function naturalCompare(a, b) { return a.localeCompare(b, 'zh-CN', { numeric: true, sensitivity: 'base' }); }
 function csvCell(value) { const s = String(value ?? ''); return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s; }
 function safeName(name) { return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '') || '产品'; }
@@ -86,12 +91,23 @@ async function scanProductDirectory(dir, name = path.basename(dir), options = {}
   const angleSelection = selectedAngleGroup ? selectedAngleGroup.images.slice(0, angleCapacity) : [];
   const images = [...rootSelection, ...angleSelection];
   const txts = files.filter((f) => path.extname(f).toLowerCase() === '.txt').map((f) => path.join(dir, f));
-  const prompt = (await Promise.all(txts.map((f) => fsp.readFile(f, 'utf8')))).map((s) => s.trim()).filter(Boolean).join('\n\n');
+  const txtRecords = await Promise.all(txts.map(async (file) => ({ file, text: (await fsp.readFile(file, 'utf8')).trim() })));
+  const prompt = txtRecords.map((item) => item.text).filter(Boolean).join('\n\n');
+  const manualPromptMode = usesManualPromptOnly(name);
+  const manualCandidates = manualPromptMode
+    ? txtRecords.filter((item) => path.basename(item.file) !== '商品事实.txt' && item.text)
+    : [];
+  const manualRecord = manualCandidates.find((item) => path.basename(item.file) === '手工提示词.txt')
+    || manualCandidates.find((item) => path.basename(item.file) === '创意要求.txt')
+    || manualCandidates[0]
+    || null;
+  const manualPrompt = manualRecord?.text || '';
   const anglePositions = ['左上', '上中', '右上', '左下', '下中', '右下'];
   const angleStart = (round - 1) % anglePositions.length;
   const lockedAnglePositions = Array.from({ length: 5 }, (_, index) => anglePositions[(angleStart + index) % anglePositions.length]);
   return {
     id: name, name, dir, images, allReferenceImages: [...rootImages, ...angleGroups.flatMap((group) => group.images)].sort(naturalCompare), txts, prompt,
+    manualPromptMode, manualPrompt, manualPromptFile: manualRecord?.file || null,
     imageSelection: {
       round, maxImages, rootAvailable: rootImages.length, angleGroups: angleGroups.map((group) => ({ name: group.name, count: group.images.length })),
       selectedAngleGroup: selectedAngleGroup?.name || null, selectedAngleCount: angleSelection.length,
@@ -100,7 +116,7 @@ async function scanProductDirectory(dir, name = path.basename(dir), options = {}
       selectedColorLabel: selectedRootContactSheet ? path.basename(selectedRootContactSheet).replace(/_?六角度合成参考图.*$/u, '') : null,
       lockedAnglePositions: selectedRootContactSheet ? lockedAnglePositions : []
     },
-    valid: images.length > 0 && txts.length > 0 && prompt.length > 0
+    valid: images.length > 0 && (manualPromptMode ? manualPrompt.length > 0 : (txts.length > 0 && prompt.length > 0))
   };
 }
 
@@ -162,4 +178,4 @@ async function appendIndex(outputsRoot, row) {
   await fsp.appendFile(file, `${CSV_HEADER.map((k) => csvCell(row[k])).join(',')}\r\n`, 'utf8');
 }
 
-module.exports = { IMAGE_EXTS, scanProductDirectory, scanProducts, allocateOutputDir, allocateRunLayout, validateImage, extensionFor, appendIndex, atomicWriteJson, randomDelayMs, safeName };
+module.exports = { IMAGE_EXTS, usesManualPromptOnly, scanProductDirectory, scanProducts, allocateOutputDir, allocateRunLayout, validateImage, extensionFor, appendIndex, atomicWriteJson, randomDelayMs, safeName };

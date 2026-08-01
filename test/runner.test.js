@@ -2,6 +2,21 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { TaskRunner } = require('../src/runner');
 
+test('L063手工模式原样发送提示词且完全绕过豆脑配置', async () => {
+  const runner = new TaskRunner('user-data', 'downloads');
+  runner.state = { creativePolicy: { enabled: true, aiEnabled: true } };
+  runner.log = () => {};
+  const result = await runner.prepareRoundPrompt({
+    name: 'L063健身板主图', manualPromptMode: true,
+    manualPrompt: '用户自己编写的提示词', manualPromptFile: 'D:/商品/创意要求.txt'
+  }, 1, 1);
+  assert.equal(result.prompt, '用户自己编写的提示词');
+  assert.equal(result.sourcePrompt, '用户自己编写的提示词');
+  assert.equal(result.creativeMode, false);
+  assert.equal(result.manualPromptMode, true);
+  assert.equal(result.creativeFingerprint, null);
+});
+
 test('旧版状态迁移后保留产品输出目录并补齐runId', () => {
   const runner = new TaskRunner('user-data', 'downloads');
   const state = runner.migrateState({ version: 1, root: 'R', createdAt: '2026-01-01T00:00:00.000Z', currentProduct: 1, products: { p: { outputDir: 'old-dir' } } }, 'R');

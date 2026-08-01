@@ -21,6 +21,18 @@ test('每次上传前可重新扫描商品文件夹中的最新参考图和TXT',
   await sharp({ create: { width: 2, height: 2, channels: 3, background: 'blue' } }).png().toFile(path.join(dir, '2.png')); await fsp.writeFile(path.join(dir, '提示.txt'), '新提示');
   product = await scanProductDirectory(dir, '产品'); assert.equal(product.images.length, 2); assert.equal(product.prompt, '新提示');
 });
+
+test('L063健身板只使用手工提示词并忽略商品事实', async () => {
+  const root = await tempDir(); const dir = path.join(root, 'L063健身板主图'); await fsp.mkdir(dir);
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: 'pink' } }).png().toFile(path.join(dir, '参考图.png'));
+  await fsp.writeFile(path.join(dir, '商品事实.txt'), '不能发送的自动商品事实');
+  await fsp.writeFile(path.join(dir, '创意要求.txt'), '这是用户手工编写的完整提示词');
+  const product = await scanProductDirectory(dir, 'L063健身板主图');
+  assert.equal(product.manualPromptMode, true);
+  assert.equal(product.manualPrompt, '这是用户手工编写的完整提示词');
+  assert.equal(path.basename(product.manualPromptFile), '创意要求.txt');
+  assert.equal(product.valid, true);
+});
 test('最终角度母图按组轮换且单轮不超过10张，并忽略候选和压力测试目录', async () => {
   const root = await tempDir(); const dir = path.join(root, '产品'); await fsp.mkdir(dir);
   await fsp.writeFile(path.join(dir, '提示.txt'), '提示');

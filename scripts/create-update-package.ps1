@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Shortens the full five-image prompt, removes conflicting creative fields, varies each scene and action, and rebuilds stale generic product names.'
+  notes = 'Adds an L063 manual-prompt-only mode that sends only the user-authored prompt and bypasses product facts, AI analysis, and DouNao configuration.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

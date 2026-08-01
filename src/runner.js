@@ -162,6 +162,11 @@ class TaskRunner extends EventEmitter {
   }
   async prepareRoundPrompt(product, round, cycle) {
     const creativePolicy = this.state?.creativePolicy || { enabled: true, globalRequirements: '' };
+    if (product.manualPromptMode) {
+      if (!String(product.manualPrompt || '').trim()) throw new Error(`商品“${product.name}”缺少手工提示词；请创建“手工提示词.txt”或填写“创意要求.txt”`);
+      this.log(`手工提示词专用模式：${product.name}；仅发送“${path.basename(product.manualPromptFile || '手工提示词.txt')}”原文，不读取商品事实、不生成或使用豆脑配置`);
+      return { sourcePrompt: product.manualPrompt, prompt: product.manualPrompt, creativeFingerprint: null, creativeMode: false, manualPromptMode: true };
+    }
     if (creativePolicy.enabled === false) {
       return { sourcePrompt: product.prompt, prompt: `${product.prompt}\n\n${LEGACY_IMAGE_REQUEST_SUFFIX}`, creativeFingerprint: null, creativeMode: false };
     }
