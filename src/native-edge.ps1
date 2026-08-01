@@ -605,6 +605,39 @@ if($Action -eq 'send'){
   if(-not $sent){throw 'Submit button was located but the page did not accept the click after 3 attempts'}
   Result @{ok=$true;attempts=$usedAttempt}
 }
+if($Action -eq 'read-marked-response'){
+  $begin=[string]$payload.beginMarker;$end=[string]$payload.endMarker
+  if(-not $begin -or -not $end){throw 'Response boundary markers are required'}
+  $timeoutSeconds=if($payload.timeoutSeconds){[Math]::Max(15,[Math]::Min(300,[int]$payload.timeoutSeconds))}else{180}
+  $deadline=[DateTime]::UtcNow.AddSeconds($timeoutSeconds);$lastText='';$stable=0
+  while([DateTime]::UtcNow -lt $deadline){
+    $pageRoot=Root;if(-not $pageRoot){throw 'ChatGPT Edge window was not found while reading the text response'}
+    $parts=New-Object System.Collections.Generic.List[string];$hasStop=$false;$hasRateLimit=$false;$hasSecurity=$false
+    foreach($el in (All $pageRoot)){
+      try{
+        $name=[string]$el.Current.Name;$help=[string]$el.Current.HelpText;$candidate=("$name $help").Trim()
+        if($name -match "Stop generating|Stop streaming|^$stopWord"){$hasStop=$true}
+        if($candidate -match "$tooFrequentWord|$tooManyWord|$operationFrequentWord|$laterRetryWord|$temporaryLimitWord.*($accessWord|access|visit)|Too many requests|requests? too frequent|rate.?limit|request limit|try again in (a few|several) minutes"){$hasRateLimit=$true}
+        if($candidate -match 'captcha|Security check|Unusual activity'){$hasSecurity=$true}
+        if($name -and $el.Current.ControlType.ProgrammaticName -match 'Text|Document'){$parts.Add($name)}
+      }catch{}
+    }
+    if($hasRateLimit){throw '__RATE_LIMITED__:ChatGPT reported a request frequency limit during AI creative analysis'}
+    if($hasSecurity){throw 'ChatGPT security verification appeared during AI creative analysis'}
+    $joined=[string]::Join("`n",$parts)
+    $occurrences=0;$cursor=0
+    while($cursor -lt $joined.Length){$found=$joined.IndexOf($begin,$cursor,[StringComparison]::Ordinal);if($found -lt 0){break};$occurrences++;$cursor=$found+$begin.Length}
+    $start=$joined.LastIndexOf($begin,[StringComparison]::Ordinal)
+    $finish=if($start -ge 0){$joined.IndexOf($end,$start+$begin.Length,[StringComparison]::Ordinal)}else{-1}
+    if($occurrences -ge 2 -and $start -ge 0 -and $finish -gt $start){
+      $text=$joined.Substring($start,$finish+$end.Length-$start)
+      if($text -eq $lastText){$stable++}else{$lastText=$text;$stable=1}
+      if(-not $hasStop -and $stable -ge 2){Result @{ok=$true;text=$text;occurrences=$occurrences}}
+    }else{$stable=0}
+    Start-Sleep -Milliseconds 750
+  }
+  throw "Timed out waiting for a complete marked ChatGPT text response after $timeoutSeconds seconds"
+}
 if($Action -eq 'upload'){
   $quoted=($payload.files|ForEach-Object{'"'+$_+'"'}) -join ' '
   $existingFileName=FindVisibleByAutomationId ([Windows.Automation.AutomationElement]::RootElement) '1148'

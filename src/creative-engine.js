@@ -3,7 +3,7 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const CREATIVE_ENGINE_VERSION = 1;
+const CREATIVE_ENGINE_VERSION = 2;
 const CONFIG_DIR_NAME = '豆脑配置';
 const CUSTOM_REQUIREMENTS_FILE = '创意要求.txt';
 
@@ -16,6 +16,8 @@ const FIXED_FIVE_IMAGE_PROMPT = `【本轮强制输出规则】
 图片1、图片2、图片3、图片4、图片5必须分别作为5个独立图像结果输出。每次图像生成任务只输出1张图片，完成一张后立即继续执行下一次，直到5张全部生成完成。
 
 严禁生成五宫格、拼图、网格图、对比图、分镜图、画中画或一张包含多个方案的图片。
+
+如果上传的参考图中包含3×2多角度合成参考图，它只用于识别同一商品的六个观察角度与结构细节，绝不代表输出排版；最终仍必须输出5张彼此独立的单场景图片，禁止照抄参考图的网格布局。
 
 本轮5张图片必须采用5种明显不同且未使用过的商品摆放方向、摄影机位置、俯仰高度、构图距离和人物位置；不能只更换背景、服装、裁切或轻微倾斜画面。
 
@@ -43,7 +45,7 @@ const PROFILE_RULES = [
   { match: /叠衣板/, scenes: ['豪华衣帽间', '欧式卧室衣柜区', '精品洗衣房', '高级公寓收纳区', '酒店式更衣空间'], actions: ['使用叠衣板折叠衬衫', '整理成摞衣物', '从衣柜取出衣物准备折叠', '展示折叠后的整齐效果', '用手操作叠衣板'], props: ['不同材质衣物、衣架和收纳篮', '高级衣柜、镜面和软装'], benefits: ['快速整齐叠衣', '统一衣物尺寸', '改善衣柜收纳'] },
   { match: /人造植物|人造草/, scenes: ['游艇甲板栏杆', '海景别墅露台', '屋顶花园栏杆', '欧式庭院围栏', '高级公寓阳台'], actions: ['在植物旁放松休息', '进行瑜伽伸展', '整理栏杆装饰', '从植物旁眺望远景', '用手调整植物固定位置'], props: ['户外沙发、花盆和海景', '宠物、遮阳伞和高级户外家具'], benefits: ['遮挡视线保护空间感', '快速营造自然氛围', '适配多种栏杆场景'] },
   { match: /拖把桶/, scenes: ['高级洗衣房', '豪华浴室外区', '通透现代厨房', '别墅家政间', '酒店式客厅'], actions: ['正在清洁地面', '把拖把放入桶中', '提起拖把桶移动', '完成清洁后整理工具', '用手展示桶的操作方式'], props: ['拖把、清洁用品和绿植', '高级地砖、毛巾架和收纳柜'], benefits: ['清洁流程方便', '移动携带直观', '帮助保持空间整洁'] },
-  { match: /健身板|瑜伽板/, scenes: ['海景别墅健身区', '豪华室内健身房', '泳池旁运动区', '高层公寓瑜伽区', '庄园露台'], actions: ['站在健身板上训练', '进行平衡训练', '在旁展示健身板', '准备开始拉伸', '用手调整健身板位置'], props: ['瑜伽垫、毛巾和水杯', '泳池、健身器材和绿植'], benefits: ['支持居家训练', '展示平衡运动方式', '适合多种运动空间'] },
+  { match: /健身板|瑜伽板/, scenes: ['海景别墅健身区', '豪华室内健身房', '泳池旁运动区', '高层公寓瑜伽区', '庄园露台'], actions: ['站在训练板侧后方正脸展示完整商品', '半蹲在训练板侧面指向关键结构', '跪坐在训练板旁准备训练', '双手分别握住两根拉力绳进行轻度展示', '在不遮挡商品的前提下用手调整训练板位置'], props: ['毛巾和水杯', '泳池、少量健身器材和绿植'], benefits: ['支持居家训练', '多种训练结构一眼可见', '适合多种运动空间'] },
   { match: /碗碟收纳柜|三层沥水架|沥水架/, scenes: ['欧式豪华厨房', '现代别墅厨房岛台', '高级开放式厨房', '酒店式餐厨空间', '通透阳光厨房'], actions: ['把清洗后的碗碟放入商品', '从商品中拿取餐具', '在旁准备餐食', '整理不同类型的餐具', '用手展示层架使用方式'], props: ['碗碟、玻璃杯、餐具和鲜花', '高级厨具、食材和装饰器皿'], benefits: ['分类收纳碗碟', '方便沥水和拿取', '充分利用厨房空间'] },
   { match: /可升降桌/, scenes: ['豪华家庭办公室', '海景公寓书房', '设计师卧室办公区', '别墅落地窗工作区', '高级创意工作室'], actions: ['站立办公', '坐姿使用桌面', '调整桌子高度', '在旁进行视频会议', '用手操作桌面设备'], props: ['笔记本电脑、台灯、书籍和咖啡', '办公椅、艺术品和绿植'], benefits: ['适配坐站办公', '改善多场景使用方式', '办公空间更灵活'] },
   { match: /鞋柜/, scenes: ['欧式豪宅玄关', '高级衣帽间入口', '现代别墅走廊', '精品公寓门厅', '酒店式更衣区'], actions: ['从鞋柜取鞋', '把鞋放入鞋柜', '在旁更换鞋子', '整理不同款式鞋履', '用手打开或展示鞋柜'], props: ['鞋履、换鞋凳、地毯和装饰画', '大型绿植、镜面和高级灯具'], benefits: ['鞋履分类收纳', '玄关更加整齐', '拿取和更换方便'] },
@@ -83,7 +85,9 @@ function isTemplateSentence(sentence) { return /(生成任务|五张图片|图�
 
 async function sourceFingerprint(product) {
   const hash = crypto.createHash('sha256');
-  const files = [...(product.txts || []), ...(product.images || [])].sort(naturalCompare);
+  // 轮次可能只上传某一个颜色的合成图；指纹仍覆盖商品的全部参考图，避免
+  // 因轮换颜色而每轮错误触发重新分析和历史归档。
+  const files = [...(product.txts || []), ...(product.allReferenceImages || product.images || [])].sort(naturalCompare);
   for (const file of files) { hash.update(path.basename(file), 'utf8'); hash.update('\0'); hash.update(await fsp.readFile(file)); hash.update('\0'); }
   return hash.digest('hex');
 }
@@ -147,15 +151,25 @@ async function extractProductFacts(product, fingerprint) {
   };
 }
 
-function buildAngle(index, cycle = 1) {
+function bankValues(bank, key, fallback) {
+  const values = unique(bank?.[key] || []);
+  return values.length ? values : fallback;
+}
+
+function buildAngle(index, cycle = 1, creativeBank = null) {
   const shifted = index + Math.max(0, cycle - 1) * 7;
+  const orientations = bankValues(creativeBank, 'productOrientations', PRODUCT_ORIENTATIONS);
+  const directions = bankValues(creativeBank, 'cameraDirections', CAMERA_DIRECTIONS);
+  const elevations = bankValues(creativeBank, 'elevations', ELEVATIONS);
+  const distances = bankValues(creativeBank, 'distances', DISTANCES);
+  const placements = bankValues(creativeBank, 'placements', PLACEMENTS);
   return {
     id: `A${String(index + 1).padStart(2, '0')}-C${cycle}`,
-    productOrientation: PRODUCT_ORIENTATIONS[shifted % PRODUCT_ORIENTATIONS.length],
-    cameraDirection: CAMERA_DIRECTIONS[(Math.floor(index / 5) + shifted * 3) % CAMERA_DIRECTIONS.length],
-    elevation: ELEVATIONS[index % ELEVATIONS.length],
-    distance: DISTANCES[(index * 2 + Math.floor(index / 10) + cycle - 1) % DISTANCES.length],
-    placement: PLACEMENTS[(index * 3 + Math.floor(index / 10) + cycle - 1) % PLACEMENTS.length],
+    productOrientation: orientations[shifted % orientations.length],
+    cameraDirection: directions[(Math.floor(index / 5) + shifted * 3) % directions.length],
+    elevation: elevations[index % elevations.length],
+    distance: distances[(index * 2 + Math.floor(index / 10) + cycle - 1) % distances.length],
+    placement: placements[(index * 3 + Math.floor(index / 10) + cycle - 1) % placements.length],
   };
 }
 
@@ -170,30 +184,50 @@ function personModeFor(index) {
 function buildCreativePlan(facts, options = {}) {
   const cycle = Math.max(1, Number(options.cycle) || 1);
   const profile = profileFor(facts.productName);
+  const creativeBank = options.creativeBank || null;
+  const scenes = bankValues(creativeBank, 'scenes', profile.scenes);
+  const actions = bankValues(creativeBank, 'actions', profile.actions);
+  const spatialRelations = bankValues(creativeBank, 'spatialRelations', []);
+  const props = bankValues(creativeBank, 'props', profile.props);
+  const lighting = bankValues(creativeBank, 'lighting', LIGHTING);
+  const people = bankValues(creativeBank, 'personTypes', PERSON_TYPES);
+  const apparel = bankValues(creativeBank, 'apparel', APPAREL);
+  const salesRoles = bankValues(creativeBank, 'salesRoles', SALES_ROLES);
+  const sellingPoints = bankValues(creativeBank, 'sellingPoints', profile.benefits);
+  const architecture = bankValues(creativeBank, 'architecturalStyles', LUXURY_SCENES);
+  const colors = bankValues(creativeBank, 'colorPalettes', []);
+  const seasons = bankValues(creativeBank, 'seasons', []);
+  const weather = bankValues(creativeBank, 'weather', []);
+  const animals = bankValues(creativeBank, 'animals', []);
   const tasks = Array.from({ length: 50 }, (_, index) => {
     const round = Math.floor(index / 5) + 1;
     const slot = index % 5;
     const offset = index + cycle * 3;
-    const luxuryBase = choose(LUXURY_SCENES, offset, '高级商业生活空间');
+    const luxuryBase = choose(architecture, offset, '高级商业生活空间');
     return {
       imageNumber: index + 1,
       round,
       slot: slot + 1,
-      salesRole: SALES_ROLES[slot],
-      angle: buildAngle(index, cycle),
+      salesRole: choose(salesRoles, offset * 7 + slot, SALES_ROLES[slot % SALES_ROLES.length]),
+      angle: buildAngle(index, cycle, creativeBank),
       personMode: personModeFor(index),
-      person: slot === 4 && round % 2 === 0 ? '无人物' : `${choose(PERSON_TYPES, offset * 3, '虚构人物')}，穿${choose(APPAREL, offset * 7, '高级日常服装')}`,
-      action: choose(profile.actions, offset * 2 + slot, '自然使用商品'),
-      scene: `${luxuryBase}中的${choose(profile.scenes, offset * 3 + slot, '真实使用区域')}`,
-      props: choose(profile.props, offset + round, '丰富高级生活道具'),
-      lighting: choose(LIGHTING, offset * 4 + slot, '通透商业光线'),
-      sellingPoint: choose(profile.benefits, offset + slot, '商品用途清晰直观'),
+      person: slot === 4 && round % 2 === 0 ? '无人物' : `${choose(people, offset * 3, '虚构人物')}，穿${choose(apparel, offset * 7, '高级日常服装')}`,
+      action: choose(actions, offset * 2 + slot, '自然使用商品'),
+      spatialRelation: choose(spatialRelations, offset * 11 + slot, ''),
+      scene: `${luxuryBase}中的${choose(scenes, offset * 3 + slot, '真实使用区域')}`,
+      props: choose(props, offset + round, '丰富高级生活道具'),
+      lighting: choose(lighting, offset * 4 + slot, '通透商业光线'),
+      colorPalette: choose(colors, offset * 13 + slot, ''),
+      season: choose(seasons, offset * 5 + round, ''),
+      weather: choose(weather, offset * 9 + slot, ''),
+      animal: choose(animals, offset * 17 + round, ''),
+      sellingPoint: choose(sellingPoints, offset + slot, '商品用途清晰直观'),
       mainImageRule: '商品完整、清晰、醒目、一眼可见；人物、动物和道具不得遮挡或弱化商品；本图可独立作为Temu商品主图',
     };
   });
   const signatures = new Set(tasks.map((task) => JSON.stringify(task.angle)));
   if (signatures.size !== 50) throw new Error('创意角度规划未能生成50个唯一组合');
-  return { schemaVersion: 1, engineVersion: CREATIVE_ENGINE_VERSION, generatedAt: new Date().toISOString(), sourceFingerprint: facts.sourceFingerprint, cycle, productId: facts.productId, productName: facts.productName, taskCount: tasks.length, peopleTaskCount: tasks.filter((task) => task.person !== '无人物').length, uniqueAngleCount: signatures.size, tasks };
+  return { schemaVersion: 2, engineVersion: CREATIVE_ENGINE_VERSION, generatedAt: new Date().toISOString(), sourceFingerprint: facts.sourceFingerprint, cycle, productId: facts.productId, productName: facts.productName, taskCount: tasks.length, peopleTaskCount: tasks.filter((task) => task.person !== '无人物').length, uniqueAngleCount: signatures.size, aiVocabularyUsed: !!creativeBank, tasks };
 }
 
 function factsPrompt(facts) {
@@ -212,13 +246,33 @@ function factsPrompt(facts) {
 
 function taskPrompt(task) {
   const a = task.angle;
-  return `图片${task.slot}（总计划第${task.imageNumber}张，角度编号${a.id}）：\n- 销售作用：${task.salesRole}\n- 商品与镜头：商品${a.productOrientation}；摄影机位于${a.cameraDirection}；${a.elevation}；${a.distance}；${a.placement}\n- 人物：${task.person}；${task.personMode}\n- 动作：${task.action}\n- 场景：${task.scene}\n- 光线与道具：${task.lighting}；可加入${task.props}\n- 本张卖点：${task.sellingPoint}\n- 主图底线：${task.mainImageRule}`;
+  const optional = [
+    task.spatialRelation ? `- 空间关系：${task.spatialRelation}` : '',
+    task.colorPalette ? `- 色彩关系：${task.colorPalette}` : '',
+    task.season || task.weather ? `- 季节与天气：${[task.season, task.weather].filter(Boolean).join('；')}` : '',
+    task.animal ? `- 可选动物元素：${task.animal}，不得遮挡或抢夺商品主体` : '',
+  ].filter(Boolean).join('\n');
+  return `图片${task.slot}（总计划第${task.imageNumber}张，角度编号${a.id}）：\n- 销售作用：${task.salesRole}\n- 商品与镜头：商品${a.productOrientation}；摄影机位于${a.cameraDirection}；${a.elevation}；${a.distance}；${a.placement}\n- 人物：${task.person}；${task.personMode}\n- 动作：${task.action}\n- 场景：${task.scene}\n${optional ? `${optional}\n` : ''}- 光线与道具：${task.lighting}；可加入${task.props}\n- 本张卖点：${task.sellingPoint}\n- 主图底线：${task.mainImageRule}`;
 }
 
-function buildRoundPrompt(facts, plan, round, globalRequirements = '') {
+function angleLockPrompt(referenceSelection) {
+  const positions = referenceSelection?.lockedAnglePositions || [];
+  if (!referenceSelection?.selectedRootContactSheet || positions.length !== 5) return '';
+  const color = referenceSelection.selectedColorLabel || '当前参考图颜色';
+  return [
+    '【本轮单角度锁定规则（优先于创意镜头描述）】',
+    `本轮上传的六角度合成参考图对应“${color}”版本；本轮5张只能使用这一颜色，不得混入其他颜色。`,
+    '合成图按左上、上中、右上、左下、下中、右下共6个独立观察角度排列。它们是同一件商品，不是六个商品。',
+    ...positions.map((position, index) => `图片${index + 1}：只锁定合成图“${position}”的商品朝向、透视和部件相对位置。`),
+    '每张图只能采用为它指定的一个角度，禁止平均、融合、镜像或拼接其他角度。其他小图只用于核对被遮挡的真实结构，不能把其他视角中的部件重复添加到目标角度。',
+    '创意计划中的摄影机位只允许在锁定角度附近自然取景；如果与锁定角度冲突，以本段角度锁定规则为准。'
+  ].join('\n');
+}
+
+function buildRoundPrompt(facts, plan, round, globalRequirements = '', referenceSelection = null) {
   const selected = plan.tasks.filter((task) => task.round === round);
   if (selected.length !== 5) throw new Error(`第${round}轮创意任务不是5张`);
-  return [`【商品事实（已从原TXT安全提取，原文件未修改）】`, factsPrompt(facts), globalRequirements ? `【本批次补充创意要求】\n${globalRequirements.trim()}` : '', `【第${round}轮五张差异化创意任务】`, ...selected.map(taskPrompt), FIXED_FIVE_IMAGE_PROMPT].filter(Boolean).join('\n\n');
+  return [`【商品事实（已从原TXT安全提取，原文件未修改）】`, factsPrompt(facts), angleLockPrompt(referenceSelection), globalRequirements ? `【本批次补充创意要求】\n${globalRequirements.trim()}` : '', `【第${round}轮五张差异化创意任务】`, ...selected.map(taskPrompt), FIXED_FIVE_IMAGE_PROMPT].filter(Boolean).join('\n\n');
 }
 
 async function atomicWrite(file, content) {
@@ -265,7 +319,7 @@ async function prepareProductCreativeFiles(product, options = {}) {
     await atomicWrite(path.join(configDir, '提取报告.txt'), reportText(facts));
     await atomicWrite(fingerprintFile, `${JSON.stringify({ schemaVersion: 1, engineVersion: CREATIVE_ENGINE_VERSION, sourceFingerprint: fingerprint, sourceFiles: facts.sourceFiles, updatedAt: new Date().toISOString() }, null, 2)}\n`);
   }
-  const plan = buildCreativePlan(facts, options);
+  const plan = buildCreativePlan(facts, { ...options, creativeBank: options.creativeBank || null });
   await atomicWrite(path.join(configDir, '创意计划.json'), `${JSON.stringify(plan, null, 2)}\n`);
   return { configDir, fingerprint, sourceChanged, facts, plan };
 }

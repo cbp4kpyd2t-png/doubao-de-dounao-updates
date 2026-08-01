@@ -199,6 +199,16 @@ test('发送按钮点击后必须确认页面已提交并支持三次重试', ()
   assert.match(send, /page did not accept the click after 3 attempts/);
 });
 
+test('AI文字分析等待完整边界标记并避开用户提示词中的第一组标记', () => {
+  const action = script.slice(script.indexOf("if($Action -eq 'read-marked-response')"), script.indexOf("if($Action -eq 'upload')"));
+  assert.match(action, /beginMarker/);
+  assert.match(action, /endMarker/);
+  assert.match(action, /\$occurrences -ge 2/);
+  assert.match(action, /LastIndexOf\(\$begin/);
+  assert.match(action, /not \$hasStop -and \$stable -ge 2/);
+  assert.match(action, /__RATE_LIMITED__/);
+});
+
 test('页面检查可识别中英文请求频繁提示并返回限流状态', () => {
   assert.match(script, /\$tooFrequentWord/);
   assert.match(script, /Too many requests/);

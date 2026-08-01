@@ -9,6 +9,7 @@ const { AdaptiveScheduler } = require('./adaptive-scheduler');
 const { transitionWorkflow, completeWorkflow, failWorkflow, isWorkflowOverdue, policyFor } = require('./workflow-state');
 const { analyzeProductImage } = require('./quality');
 const { prepareProductCreativeFiles, buildRoundPrompt, CREATIVE_ENGINE_VERSION } = require('./creative-engine');
+const { ensureAiCreativeBank } = require('./creative-ai');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const LEGACY_IMAGE_REQUEST_SUFFIX = '请严格以已上传的产品参考图为产品身份锚点，一次生成5张彼此独立的方形电商主图。保持产品形状、颜色、材质、结构和比例一致；不要添加可读文字、Logo、水印、促销徽章或无关配件。';
@@ -145,7 +146,7 @@ class TaskRunner extends EventEmitter {
     } finally { this.rateLimitRecoveryActive = false; this.resetWatchdogSamples(); }
   }
   async refreshProductInputs(context) {
-    const latest = await scanProductDirectory(context.productDir, context.productName);
+    const latest = await scanProductDirectory(context.productDir, context.productName, { round: context.round, maxImages: 10 });
     if (!latest.valid) throw new Error(`商品“${context.productName}”上传前重新检查失败：当前文件夹缺少有效参考图或TXT提示词`);
     const previous = JSON.stringify({ images: context.images || [], prompt: context.sourcePromptText || '' });
     const current = JSON.stringify({ images: latest.images, prompt: latest.prompt });
@@ -164,9 +165,38 @@ class TaskRunner extends EventEmitter {
     if (creativePolicy.enabled === false) {
       return { sourcePrompt: product.prompt, prompt: `${product.prompt}\n\n${LEGACY_IMAGE_REQUEST_SUFFIX}`, creativeFingerprint: null, creativeMode: false };
     }
-    const bundle = await prepareProductCreativeFiles(product, { cycle });
-    const prompt = buildRoundPrompt(bundle.facts, bundle.plan, round, creativePolicy.globalRequirements || '');
-    this.log(`差异化创意已就绪：${product.name} 第${round}轮，商品事实${bundle.sourceChanged ? '已重新提取' : '沿用已验证版本'}，创意引擎v${CREATIVE_ENGINE_VERSION}`);
+    let bundle = await prepareProductCreativeFiles(product, { cycle });
+    let aiVocabularyUsed = false;
+    if (creativePolicy.aiEnabled !== false) {
+      try {
+        const ai = await ensureAiCreativeBank({
+          browser: this.browser,
+          product,
+          facts: bundle.facts,
+          configDir: bundle.configDir,
+          fingerprint: bundle.fingerprint,
+          force: creativePolicy.forceReanalyze === true && !this.state.products?.[product.id]?.aiReanalyzedAt,
+          diversityStrength: creativePolicy.diversityStrength || 'balanced',
+          log: (message) => this.log(message),
+        });
+        bundle = await prepareProductCreativeFiles(product, {
+          cycle,
+          creativeBank: ai.approvedBank,
+          diversityStrength: creativePolicy.diversityStrength || 'balanced',
+        });
+        aiVocabularyUsed = true;
+        const productState = this.state.products?.[product.id];
+        if (productState) {
+          productState.aiVocabularyFingerprint = bundle.fingerprint;
+          if (!ai.reused) productState.aiReanalyzedAt = new Date().toISOString();
+        }
+        this.log(`AI差异化词库${ai.reused ? '已从缓存读取' : '已通过挑剔审稿'}：${product.name}`);
+      } catch (error) {
+        this.log(`AI差异化分析未完成，自动使用本地词库继续，不暂停任务：${error.message}`);
+      }
+    }
+    const prompt = buildRoundPrompt(bundle.facts, bundle.plan, round, creativePolicy.globalRequirements || '', product.imageSelection);
+    this.log(`差异化创意已就绪：${product.name} 第${round}轮，商品事实${bundle.sourceChanged ? '已重新提取' : '沿用已验证版本'}，${aiVocabularyUsed ? 'AI审稿词库' : '本地安全词库'}，创意引擎v${CREATIVE_ENGINE_VERSION}`);
     return { sourcePrompt: prompt, prompt, creativeFingerprint: bundle.fingerprint, creativeMode: true };
   }
   async checkIgnoredChats(context) {
@@ -232,6 +262,86 @@ class TaskRunner extends EventEmitter {
       ignoredChats.push(entry);
     } else Object.assign(entry, metadata, { reason, inputFingerprint: entry.inputFingerprint || context.inputFingerprint });
     await this.checkpoint(); this.log(`已将超时对话加入稍后回查队列：${url}`); return entry;
+  }
+
+  async finalRescanCurrentChatBeforeNextChat(context, entry = null, options = {}) {
+    if (!context || !this.browser) return { entry, detectedTotal: 0, added: [], promoted: [] };
+    const ignoredChats = this.state.ignoredChats ||= [];
+    let currentEntry = entry;
+    if (!currentEntry) {
+      const url = await this.browser.waitForStableCurrentChatUrl(15000).catch(() => null);
+      if (!url) {
+        this.log('切换新对话前最终复扫：当前对话地址尚未稳定，无法建立缩略图断点；稍后仍会按旧对话回查规则处理');
+        return { entry: null, detectedTotal: 0, added: [], promoted: [] };
+      }
+      currentEntry = ignoredChats.find((item) => item.url === url);
+      if (!currentEntry) {
+        currentEntry = { id: crypto.randomUUID(), url, productId: context.productId, round: context.round, cycle: context.cycle, inputFingerprint: context.inputFingerprint, status: 'pending', processedIndexes: [], ignoredAt: new Date().toISOString(), reason: '切换新对话前最终复扫' };
+        ignoredChats.push(currentEntry);
+      }
+    }
+    currentEntry.processedIndexes = [...new Set(currentEntry.processedIndexes || [])].sort((a, b) => a - b);
+    const maxPasses = Math.max(1, Math.min(5, Number(options.maxPasses) || 5));
+    const allAdded = []; let detectedTotal = Math.max(0, Number(options.initialTotal) || 0); let noProgressPasses = 0;
+    this.log(`准备开启新对话前执行最终复扫；当前已处理缩略图${currentEntry.processedIndexes.length}/5`);
+    for (let pass = 1; pass <= maxPasses && currentEntry.processedIndexes.length < 5; pass += 1) {
+      await this.waitIfPaused();
+      let viewerInfo;
+      try {
+        viewerInfo = await this.browser.getViewerImageCount({ targetTotal: 5, maxWaitSeconds: pass === 1 ? 20 : 12 });
+      } catch (error) {
+        currentEntry.lastError = `最终复扫第${pass}次检测失败：${error.message}`;
+        this.log(currentEntry.lastError);
+        if (pass < maxPasses) await sleep(1200);
+        continue;
+      }
+      if (!viewerInfo?.found || (viewerInfo.total || 0) <= 0) {
+        currentEntry.lastError = `最终复扫第${pass}次未检测到可保存图片`;
+        this.log(currentEntry.lastError);
+        if (pass < maxPasses) await sleep(1200);
+        continue;
+      }
+      detectedTotal = Math.max(detectedTotal, Math.min(5, viewerInfo.total || 1));
+      currentEntry.detectedTotal = Math.max(Number(currentEntry.detectedTotal) || 0, detectedTotal);
+      this.detectedImages = detectedTotal;
+      this.emitStatus({ product: context.productName, round: context.round, completed: context.ps.completed, phase: '切换前最终复扫' });
+      const processedBefore = currentEntry.processedIndexes.length;
+      if (detectedTotal > processedBefore) {
+        this.nativeSaveInFlight = true;
+        try {
+          const added = await this.stageChatImagesToPool(context, currentEntry, detectedTotal);
+          allAdded.push(...added);
+        } catch (error) {
+          currentEntry.lastError = `最终复扫第${pass}次补存失败：${error.message}`;
+          this.log(currentEntry.lastError);
+        } finally {
+          this.nativeSaveInFlight = false;
+          this.resetWatchdogSamples();
+        }
+      }
+      const processedAfter = currentEntry.processedIndexes.length;
+      this.log(`切换前最终复扫第${pass}/${maxPasses}次：检测${detectedTotal}/5张，已处理${processedAfter}/5张，本次新增${Math.max(0, processedAfter - processedBefore)}张`);
+      if (detectedTotal >= 5 && processedAfter >= 5) {
+        currentEntry.status = 'collected'; currentEntry.collectedAt = new Date().toISOString(); currentEntry.lastError = null;
+        break;
+      }
+      currentEntry.status = 'pending';
+      currentEntry.nextCheckAt = new Date(Date.now() + 5 * 60000).toISOString();
+      noProgressPasses = processedAfter > processedBefore ? 0 : noProgressPasses + 1;
+      if (noProgressPasses >= 3) {
+        this.log('切换前最终复扫连续3次没有新增已处理缩略图，保留当前对话断点并交给稍后回查');
+        break;
+      }
+      if (pass < maxPasses) await sleep(1200);
+    }
+    if (currentEntry.processedIndexes.length < 5) {
+      currentEntry.status = 'pending';
+      currentEntry.nextCheckAt ||= new Date(Date.now() + 5 * 60000).toISOString();
+    }
+    const promoted = await this.promotePendingPool(context);
+    await this.checkpoint();
+    this.log(`切换新对话前最终复扫完成：检测${detectedTotal}/5张，累计已处理${currentEntry.processedIndexes.length}/5张，新增暂存${allAdded.length}张，转入正式目录${promoted.length}张`);
+    return { entry: currentEntry, detectedTotal, added: allAdded, promoted };
   }
 
   async syncPendingPoolState(context) {
@@ -409,6 +519,9 @@ class TaskRunner extends EventEmitter {
     state.version = 5;
     state.creativePolicy = {
       enabled: prior.creativePolicy?.enabled !== false,
+      aiEnabled: prior.creativePolicy?.aiEnabled !== false,
+      diversityStrength: ['conservative', 'balanced', 'bold'].includes(prior.creativePolicy?.diversityStrength) ? prior.creativePolicy.diversityStrength : 'balanced',
+      forceReanalyze: prior.creativePolicy?.forceReanalyze === true,
       globalRequirements: String(prior.creativePolicy?.globalRequirements || '').slice(0, 4000),
     };
     state.scheduler.enabled = state.adaptiveScheduling;
@@ -448,7 +561,13 @@ class TaskRunner extends EventEmitter {
         if (options.ignoredCheckEveryChats !== undefined) this.state.ignoredCheckEveryChats = Math.max(1, Math.min(20, Math.trunc(Number(options.ignoredCheckEveryChats) || 10)));
         if (options.adaptiveScheduling !== undefined) this.state.adaptiveScheduling = options.adaptiveScheduling !== false;
         if (options.qualityPolicy) this.state.qualityPolicy = { ...this.state.qualityPolicy, ...options.qualityPolicy };
-        if (options.creativePolicy) this.state.creativePolicy = { enabled: options.creativePolicy.enabled !== false, globalRequirements: String(options.creativePolicy.globalRequirements || '').slice(0, 4000) };
+        if (options.creativePolicy) this.state.creativePolicy = {
+          enabled: options.creativePolicy.enabled !== false,
+          aiEnabled: options.creativePolicy.aiEnabled !== false,
+          diversityStrength: ['conservative', 'balanced', 'bold'].includes(options.creativePolicy.diversityStrength) ? options.creativePolicy.diversityStrength : 'balanced',
+          forceReanalyze: options.creativePolicy.forceReanalyze === true,
+          globalRequirements: String(options.creativePolicy.globalRequirements || '').slice(0, 4000),
+        };
       } else {
         const layout = await allocateRunLayout(outputs, validProducts.map((item) => item.name));
         const totalCycles = Math.max(1, Math.min(99, Math.trunc(Number(options.totalCycles) || 1)));
@@ -461,7 +580,13 @@ class TaskRunner extends EventEmitter {
         const qualityPolicy = { enabled: options.qualityPolicy?.enabled !== false, minDimension: Math.max(256, Math.min(2048, Math.trunc(Number(options.qualityPolicy?.minDimension) || 512))), squareTolerance: 0.08, requireWhite: options.qualityPolicy?.requireWhite === true, strictConsistency: options.qualityPolicy?.strictConsistency === true };
         this.state = { version: 4, pendingPoolVersion: 1, thumbnailProgressVersion: 2, ignoredCheckPolicyVersion: 2, runId: crypto.randomUUID(), root, runOutputDir: layout.runDir, runOutputDirs: [layout.runDir], createdAt: new Date().toISOString(), status: 'active', currentCycle: 1, totalCycles, waitEnabled, waitMinSeconds: waitEnabled ? waitMinSeconds : 0, waitMaxSeconds: waitEnabled ? waitMaxSeconds : 0, generationTimeoutSeconds, ignoredCheckEveryChats, adaptiveScheduling, scheduler: { enabled: adaptiveScheduling }, workflow: { version: 1, sequence: 0, history: [], current: null, lastCompleted: null, recoveryCount: 0 }, qualityPolicy, qualityStats: { checked: 0, approved: 0, warnings: 0, rejected: 0 }, rateLimitLevel: 0, rateLimitUntil: null, rateLimitRecoveryPending: false, currentProduct: 0, products: {}, ignoredChats: [], newChatsSinceIgnoredCheck: 0 };
         this.state.version = 5;
-        this.state.creativePolicy = { enabled: options.creativePolicy?.enabled !== false, globalRequirements: String(options.creativePolicy?.globalRequirements || '').slice(0, 4000) };
+        this.state.creativePolicy = {
+          enabled: options.creativePolicy?.enabled !== false,
+          aiEnabled: options.creativePolicy?.aiEnabled !== false,
+          diversityStrength: ['conservative', 'balanced', 'bold'].includes(options.creativePolicy?.diversityStrength) ? options.creativePolicy.diversityStrength : 'balanced',
+          forceReanalyze: options.creativePolicy?.forceReanalyze === true,
+          globalRequirements: String(options.creativePolicy?.globalRequirements || '').slice(0, 4000),
+        };
         for (const product of validProducts) this.state.products[product.id] = { outputDir: layout.productDirs[product.name], completed: 0, round: 0, chatAttempts: 0, hashes: [], thumbnailProgress: {}, pendingPool: [] };
       }
       this.scheduler = new AdaptiveScheduler({ ...this.state.scheduler, enabled: this.state.adaptiveScheduling }); this.state.scheduler = this.scheduler.snapshot();
@@ -496,9 +621,10 @@ class TaskRunner extends EventEmitter {
           await this.waitIfPaused();
           if (this.rateLimitRestartRequested) { await this.recoverAfterRateLimitCooldown('界面监控触发的限流冷却结束'); this.rateLimitRestartRequested = false; }
           const nextRound = ps.round + 1; this.detectedImages = 0;
-          const latestProduct = await scanProductDirectory(product.dir, product.name);
+          const latestProduct = await scanProductDirectory(product.dir, product.name, { round: nextRound, maxImages: 10 });
           if (!latestProduct.valid) { const reason = `商品“${product.name}”上传前重新检查发现缺少有效参考图或TXT提示词，已自动跳过并进入下一个商品`; this.log(reason); ps.status = 'skipped'; ps.skipReason = reason; this.state.skippedProducts ||= []; this.state.skippedProducts.push({ productId: product.id, reason, skippedAt: new Date().toISOString() }); this.recoveryContext = null; await this.checkpoint(); break roundLoop; }
           if (JSON.stringify(latestProduct.images) !== JSON.stringify(product.images) || latestProduct.prompt !== product.prompt) this.log(`商品“${product.name}”文件夹内容已变化，本轮将使用最新的${latestProduct.images.length}张参考图和TXT提示词`);
+          if (latestProduct.imageSelection?.selectedAngleGroup) this.log(`本轮参考图限量为${latestProduct.images.length}/10张：根目录${Math.min(latestProduct.imageSelection.rootAvailable, 10)}张 + 角度组“${latestProduct.imageSelection.selectedAngleGroup}”${latestProduct.imageSelection.selectedAngleCount}张`);
           const preparedPrompt = await this.runStep('生成差异化创意', () => this.prepareRoundPrompt(latestProduct, nextRound, this.state.currentCycle), { maxAttempts: 2 });
           const prompt = preparedPrompt.prompt;
           const inputFingerprint = await buildInputFingerprint(latestProduct.images, prompt);
@@ -522,18 +648,14 @@ class TaskRunner extends EventEmitter {
             if (error.message !== '__GENERATION_TIMEOUT__' && error.message !== '__WORKFLOW_RECOVERY__') throw error;
             this.scheduler.record({ outcome: 'timeout', generationMs: Date.now() - this.recoveryContext.generationStartedAt, images: 0 }); await this.schedulerCheckpoint();
             const deferred = await this.deferCurrentChat(this.recoveryContext, `在${adaptiveGenerationSeconds}秒内未检测到完整图片`);
-            this.log(`商品“${product.name}”在${adaptiveGenerationSeconds}秒内未生成完整图片，${deferred ? '已记录该对话并' : '当前对话地址尚未形成，仍将'}立即打开下一新对话`); this.recoveryContext = null; this.watchRecoveryCount = 0; this.workflowRecoveryRequested = false; await this.checkpoint(); continue roundLoop;
+            await this.finalRescanCurrentChatBeforeNextChat(this.recoveryContext, deferred, { initialTotal: deferred?.detectedTotal || 0 });
+            this.log(`商品“${product.name}”在${adaptiveGenerationSeconds}秒内未生成完整图片，${deferred ? '已记录并最终复扫该对话后' : '当前对话地址尚未形成，仍将'}打开下一新对话`); this.recoveryContext = null; this.watchRecoveryCount = 0; this.workflowRecoveryRequested = false; await this.checkpoint(); continue roundLoop;
           }
           if (generationResult?.status === 'partial') {
             const total = generationResult.viewer?.total || 0;
             this.scheduler.record({ outcome: 'partial', generationMs: Date.now() - this.recoveryContext.generationStartedAt, images: total }); await this.schedulerCheckpoint();
             const deferred = await this.deferCurrentChat(this.recoveryContext, `等待结束时仅生成${total}/5张`, { detectedTotal: total });
-            if (deferred && total > 0) {
-              this.nativeSaveInFlight = true;
-              try { await this.stageChatImagesToPool(this.recoveryContext, deferred, total); await this.promotePendingPool(this.recoveryContext); }
-              catch (error) { deferred.lastError = error.message; this.log(`部分图片暂存失败，将保留对话稍后重新检查：${error.message}`); }
-              finally { this.nativeSaveInFlight = false; }
-            }
+            if (deferred) await this.finalRescanCurrentChatBeforeNextChat(this.recoveryContext, deferred, { initialTotal: total });
             this.recoveryContext = null; this.watchRecoveryCount = 0; await this.checkpoint(); continue roundLoop;
           }
           this.log(`商品“${product.name}”已确认5张图片全部生成完成，正在进行保存前稳定检查`);
@@ -549,16 +671,18 @@ class TaskRunner extends EventEmitter {
             (this.state.ignoredChats ||= []).push(currentEntry);
           }
           let added; let promoted;
+          const rejectedBefore = this.state.qualityStats?.rejected || 0;
           this.nativeSaveInFlight = true;
           try {
-            const rejectedBefore = this.state.qualityStats?.rejected || 0;
             added = await this.runStep('保存图片', () => this.stageChatImagesToPool(this.recoveryContext, currentEntry, Math.min(5, viewerInfo.total || 5)), { maxAttempts: 1 });
             if ((currentEntry.processedIndexes || []).length >= 5) { currentEntry.status = 'collected'; currentEntry.collectedAt = new Date().toISOString(); }
             else currentEntry.status = 'pending';
             promoted = await this.promotePendingPool(this.recoveryContext);
-            this.scheduler.record({ outcome: added.length >= 5 ? 'success' : 'partial', generationMs: Date.now() - this.recoveryContext.generationStartedAt, images: added.length, qualityRejected: (this.state.qualityStats?.rejected || 0) - rejectedBefore }); await this.schedulerCheckpoint();
           }
           finally { this.nativeSaveInFlight = false; this.resetWatchdogSamples(); }
+          const finalSweep = await this.finalRescanCurrentChatBeforeNextChat(this.recoveryContext, currentEntry, { initialTotal: viewerInfo.total || 0 });
+          added.push(...finalSweep.added); promoted.push(...finalSweep.promoted);
+          this.scheduler.record({ outcome: (currentEntry.processedIndexes || []).length >= 5 ? 'success' : 'partial', generationMs: Date.now() - this.recoveryContext.generationStartedAt, images: added.length, qualityRejected: (this.state.qualityStats?.rejected || 0) - rejectedBefore }); await this.schedulerCheckpoint();
           roundCommitted = ps.round > roundAtStart; this.recoveryContext = null;
           this.log(`当前完整对话向统一暂存池新增${added.length}张，本次转入正式目录${promoted.length}张；暂存池剩余${ps.pendingPool.length}张`);
           await this.checkpoint();

@@ -21,6 +21,55 @@ test('每次上传前可重新扫描商品文件夹中的最新参考图和TXT',
   await sharp({ create: { width: 2, height: 2, channels: 3, background: 'blue' } }).png().toFile(path.join(dir, '2.png')); await fsp.writeFile(path.join(dir, '提示.txt'), '新提示');
   product = await scanProductDirectory(dir, '产品'); assert.equal(product.images.length, 2); assert.equal(product.prompt, '新提示');
 });
+test('最终角度母图按组轮换且单轮不超过10张，并忽略候选和压力测试目录', async () => {
+  const root = await tempDir(); const dir = path.join(root, '产品'); await fsp.mkdir(dir);
+  await fsp.writeFile(path.join(dir, '提示.txt'), '提示');
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toFile(path.join(dir, '原图.png'));
+  const finalAngles = path.join(dir, 'L063最终角度母图_18张');
+  const lavender = path.join(finalAngles, '浅紫色');
+  const pink = path.join(finalAngles, '粉色');
+  const candidate = path.join(dir, '角度母图候选');
+  const stress = path.join(dir, '压力测试_图片加文案');
+  await fsp.mkdir(lavender, { recursive: true }); await fsp.mkdir(pink); await fsp.mkdir(candidate); await fsp.mkdir(stress);
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: 'blue' } }).png().toFile(path.join(pink, '粉色_A.png'));
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: 'green' } }).png().toFile(path.join(lavender, '浅紫色_A.png'));
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: 'black' } }).png().toFile(path.join(candidate, '不合格.png'));
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } }).png().toFile(path.join(stress, '测试.png'));
+  const first = await scanProductDirectory(dir, '产品', { round: 1, maxImages: 10 });
+  const second = await scanProductDirectory(dir, '产品', { round: 2, maxImages: 10 });
+  assert.equal(first.images.length, 2); assert.equal(second.images.length, 2);
+  assert.notEqual(first.imageSelection.selectedAngleGroup, second.imageSelection.selectedAngleGroup);
+  assert.ok(first.images.some((file) => file.endsWith('原图.png')));
+  assert.ok(second.images.some((file) => file.endsWith('原图.png')));
+  assert.ok(![...first.images, ...second.images].some((file) => file.endsWith('不合格.png') || file.endsWith('测试.png')));
+});
+test('同一角度组存在合成参考图时只上传合成图而不上传六张单图', async () => {
+  const root = await tempDir(); const dir = path.join(root, '产品'); const angles = path.join(dir, '最终角度母图');
+  await fsp.mkdir(angles, { recursive: true }); await fsp.writeFile(path.join(dir, '提示.txt'), '提示');
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toFile(path.join(dir, '原图.png'));
+  for (const suffix of ['A', 'B', 'C', 'D', 'E', 'F']) {
+    await sharp({ create: { width: 2, height: 2, channels: 3, background: 'blue' } }).png().toFile(path.join(angles, `粉色_${suffix}.png`));
+  }
+  await sharp({ create: { width: 3, height: 2, channels: 3, background: 'green' } }).png().toFile(path.join(angles, '粉色_六角度合成参考图.png'));
+  const product = await scanProductDirectory(dir, '产品', { round: 1, maxImages: 10 });
+  assert.equal(product.images.length, 2);
+  assert.ok(product.images.some((file) => file.endsWith('粉色_六角度合成参考图.png')));
+  assert.ok(!product.images.some((file) => file.endsWith('粉色_A.png')));
+});
+test('根目录多个颜色六角度合成图每轮只上传一个并轮换颜色', async () => {
+  const root = await tempDir(); const dir = path.join(root, 'L063健身板主图'); await fsp.mkdir(dir);
+  await fsp.writeFile(path.join(dir, '商品事实.txt'), '健身板结构事实');
+  for (const [name, color] of [['粉色', 'pink'], ['黑色', 'black'], ['浅紫色', 'lavender']]) {
+    await sharp({ create: { width: 300, height: 200, channels: 3, background: color } }).png().toFile(path.join(dir, `${name}_六角度合成参考图.png`));
+  }
+  const first = await scanProductDirectory(dir, 'L063健身板主图', { round: 1 });
+  const second = await scanProductDirectory(dir, 'L063健身板主图', { round: 2 });
+  assert.equal(first.images.length, 1);
+  assert.equal(second.images.length, 1);
+  assert.notEqual(first.images[0], second.images[0]);
+  assert.equal(first.imageSelection.lockedAnglePositions.length, 5);
+  assert.equal(first.allReferenceImages.length, 3);
+});
 test('输出目录重名时追加数字', async () => {
   const root = await tempDir(); const a = await allocateOutputDir(root, '商品'); const b = await allocateOutputDir(root, '商品');
   assert.equal(path.basename(a), '商品_1'); assert.equal(path.basename(b), '商品_2');

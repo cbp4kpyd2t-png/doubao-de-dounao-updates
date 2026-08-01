@@ -126,7 +126,8 @@ test('回收旧对话首次加载后会再刷新一次避免白屏', () => {
 
 test('每次打开上传前重新读取当前商品文件夹', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
-  assert.match(source, /await scanProductDirectory\(product\.dir, product\.name\)/);
+  assert.match(source, /await scanProductDirectory\(product\.dir, product\.name, \{ round: nextRound, maxImages: 10 \}\)/);
+  assert.match(source, /参考图限量为/);
   assert.match(source, /await this\.refreshProductInputs\(context\)/);
   assert.match(source, /文件夹内容已变化/);
 });
@@ -314,6 +315,41 @@ test('生成完成后只在确认五图列表稳定时进入正式保存', () =>
   assert.match(source, /查看器稳定检测结果/);
   assert.match(source, /generationResult\?\.viewer \|\| await this\.runStep\('确认图片'/);
   assert.match(source, /this\.detectedImages = viewerInfo\.total \|\| 0/);
+});
+
+test('开启新对话前最终复扫会把首次仅保存一张后的其余四张全部补存', async () => {
+  const runner = new TaskRunner('user-data', 'downloads');
+  runner.state = { ignoredChats: [], qualityStats: { checked: 0, approved: 0, warnings: 0, rejected: 0 } };
+  runner.checkpoint = async () => {}; runner.waitIfPaused = async () => {}; runner.resetWatchdogSamples = () => {}; runner.emitStatus = () => {}; runner.log = () => {};
+  let scans = 0; runner.browser = {
+    waitForStableCurrentChatUrl: async () => 'https://chatgpt.com/c/five-images',
+    getViewerImageCount: async () => { scans += 1; return { found: true, five: true, total: 5 }; },
+  };
+  const entry = { id: 'chat-1', url: 'https://chatgpt.com/c/five-images', productId: 'p1', cycle: 1, status: 'collecting', processedIndexes: [0] };
+  runner.state.ignoredChats.push(entry);
+  runner.stageChatImagesToPool = async (_context, currentEntry) => {
+    const next = [0, 1, 2, 3, 4].find((index) => !currentEntry.processedIndexes.includes(index));
+    if (next === undefined) return [];
+    currentEntry.processedIndexes.push(next); currentEntry.processedIndexes.sort((a, b) => a - b);
+    return [{ thumbnailIndex: next, file: `image-${next}.png` }];
+  };
+  runner.promotePendingPool = async () => [];
+  const context = { productId: 'p1', productName: '商品', round: 1, cycle: 1, inputFingerprint: 'input-1', ps: { completed: 0 } };
+  const result = await runner.finalRescanCurrentChatBeforeNextChat(context, entry, { initialTotal: 5, maxPasses: 5 });
+  assert.deepEqual(entry.processedIndexes, [0, 1, 2, 3, 4]);
+  assert.equal(entry.status, 'collected');
+  assert.equal(result.added.length, 4);
+  assert.equal(scans, 4);
+});
+
+test('所有进入下一新对话的生成结果分支都会执行切换前最终复扫', () => {
+  const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
+  assert.match(source, /async finalRescanCurrentChatBeforeNextChat/);
+  assert.match(source, /准备开启新对话前执行最终复扫/);
+  assert.match(source, /最终复扫该对话后/);
+  assert.match(source, /generationResult\?\.status === 'partial'[\s\S]*finalRescanCurrentChatBeforeNextChat/);
+  assert.match(source, /const finalSweep = await this\.finalRescanCurrentChatBeforeNextChat/);
+  assert.match(source, /currentEntry\.processedIndexes\.length < 5/);
 });
 
 test('UI显示本轮实际识别图片数量', () => {

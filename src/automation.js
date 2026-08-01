@@ -145,6 +145,27 @@ class ChatGPTAutomation {
     const timeoutSeconds = Math.max(10, Math.min(600, Math.trunc(Number(generationTimeoutSeconds) || 60)));
     const before = await runNative('inspect'); this.downloadBaseline = before.downloadCount || 0; this.generatedBaseline = before.generatedCount || 0; clipboard.writeText(text); const sent = await runNative('send'); if ((sent.attempts || 1) > 1) this.log(`发送按钮首次点击未生效，第${sent.attempts}次重试后已确认提交`); this.expectedAttachments = 0; this.generationDeadline = Date.now() + timeoutSeconds * 1000; this.generationTimeoutSeconds = timeoutSeconds;
   }
+  async requestStructuredText(text, options = {}) {
+    const images = Array.isArray(options.images) ? options.images : [];
+    const timeoutSeconds = Math.max(15, Math.min(300, Math.trunc(Number(options.timeoutSeconds) || 180)));
+    await this.newChat();
+    if (images.length) await this.uploadReferences(images, () => false, { maxRefreshCycles: 1, deadlineAt: Date.now() + 180000 });
+    if (this.expectedAttachments > 0) {
+      const verified = await runNative('verify-attachments', { expected: this.expectedAttachments }, 90000);
+      if (!verified.ok) throw new Error(`AI分析发送前附件校验失败：应有${this.expectedAttachments}张，实际${verified.attachmentCount || 0}张`);
+    }
+    clipboard.writeText(String(text || ''));
+    const sent = await runNative('send');
+    this.expectedAttachments = 0;
+    if ((sent.attempts || 1) > 1) this.log(`AI文字分析的发送按钮第${sent.attempts}次重试后提交成功`);
+    const result = await runNative('read-marked-response', {
+      beginMarker: 'DOUNAO_JSON_BEGIN',
+      endMarker: 'DOUNAO_JSON_END',
+      timeoutSeconds,
+    }, (timeoutSeconds + 20) * 1000);
+    if (!result.ok || !result.text) throw new Error('未读取到完整的AI结构化回答');
+    return result.text;
+  }
   async waitForGeneration(shouldPause = () => false) {
     let sawStop = false; let generationEnded = false; let imagesStable = 0; let lastViewerProbe = 0; this.generationDeadline ||= Date.now() + (this.generationTimeoutSeconds || 60) * 1000;
     while (Date.now() < this.generationDeadline) {

@@ -49,6 +49,27 @@ test('creative plan contains 50 unique composite angles and exactly five tasks p
   assert.ok(plan.tasks.every((task) => task.mainImageRule.includes('Temu')));
 });
 
+test('approved AI vocabulary changes scene, action and camera dimensions without changing the fixed five-image rule', async () => {
+  const item = await fixture('橱柜厨房岛台置物架主图', '黑色双层置物架，用于厨房岛台收纳。');
+  const { facts } = await prepareProductCreativeFiles(item.product, { cycle: 1 });
+  const creativeBank = {
+    scenes: ['雨后玻璃温室备餐区', '游艇甲板早餐服务区'],
+    actions: ['双手移动商品到工作台', '从下层取出餐盘'],
+    cameraDirections: ['贴近台面的左后侧机位', '人物肩后越肩机位'],
+    salesRoles: ['展示移动效率', '展示上下层分类'],
+    spatialRelations: ['商品与人物处于同一景深'],
+    architecturalStyles: ['欧式庄园玻璃温室'],
+  };
+  const plan = buildCreativePlan(facts, { cycle: 1, creativeBank });
+  assert.equal(plan.aiVocabularyUsed, true);
+  assert.ok(plan.tasks.some((task) => task.scene.includes('雨后玻璃温室备餐区')));
+  assert.ok(plan.tasks.some((task) => task.action === '双手移动商品到工作台'));
+  assert.ok(plan.tasks.some((task) => task.angle.cameraDirection === '人物肩后越肩机位'));
+  const prompt = buildRoundPrompt(facts, plan, 1);
+  assert.ok(prompt.includes(FIXED_FIVE_IMAGE_PROMPT));
+  assert.match(prompt, /空间关系/);
+});
+
 test('round prompt uses cleaned facts, five distinct tasks, and mandatory five-image wording', async () => {
   const item = await fixture('橱柜厨房岛台置物架主图', '黑色双层置物架，用于厨房岛台收纳。');
   const { facts, plan } = await prepareProductCreativeFiles(item.product, { cycle: 1 });
@@ -61,6 +82,20 @@ test('round prompt uses cleaned facts, five distinct tasks, and mandatory five-i
   assert.match(prompt, /不是一张包含5个方案的图片/);
   assert.ok(prompt.includes(FIXED_FIVE_IMAGE_PROMPT));
   assert.equal((prompt.match(/角度编号A/g) || []).length, 5);
+});
+
+test('round prompt locks five outputs to five positions from one contact sheet', async () => {
+  const item = await fixture('L063健身板主图', '粉色健身板。');
+  const { facts, plan } = await prepareProductCreativeFiles(item.product, { cycle: 1 });
+  const prompt = buildRoundPrompt(facts, plan, 1, '', {
+    selectedRootContactSheet: '粉色_六角度合成参考图.png',
+    selectedColorLabel: '粉色',
+    lockedAnglePositions: ['左上', '上中', '右上', '左下', '下中'],
+  });
+  assert.match(prompt, /本轮单角度锁定规则/);
+  assert.match(prompt, /图片1：只锁定合成图“左上”/);
+  assert.match(prompt, /图片5：只锁定合成图“下中”/);
+  assert.match(prompt, /禁止平均、融合、镜像或拼接其他角度/);
 });
 
 test('unchanged sources are reused; changed sources archive the previous managed version', async () => {
