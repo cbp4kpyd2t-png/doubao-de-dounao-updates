@@ -88,8 +88,17 @@ test('安装优先使用新包内助手并等待全部旧版子进程退出', ()
   const helperSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'update-helper.ps1'), 'utf8');
   assert.match(managerSource, /const stagedHelper = path\.join\(this\.readyUpdate\.contentDir/);
   assert.match(managerSource, /fs\.existsSync\(stagedHelper\) \? stagedHelper : currentHelper/);
+  assert.match(managerSource, /child\.once\('spawn'/);
+  assert.match(managerSource, /安装助手启动超时/);
   assert.match(helperSource, /Get-CimInstance Win32_Process/);
   assert.match(helperSource, /StartsWith\(\$installPrefix/);
+  assert.match(helperSource, /Stop-Process -Id \$process\.ProcessId -Force/);
   assert.match(helperSource, /Copy-DirectoryContents/);
   assert.match(helperSource, /install\.log/);
+});
+
+test('安装更新时主进程有五秒退出兜底，避免安装助手永久等待', () => {
+  const fs = require('node:fs'); const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  assert.match(main, /win\?\.hide\(\)/);
+  assert.match(main, /setTimeout\(\(\) => app\.exit\(0\), 5000\)/);
 });

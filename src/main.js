@@ -95,4 +95,18 @@ ipcMain.handle('update:getSettings', async () => { requireAdmin(); return update
 ipcMain.handle('update:chooseSource', async () => { requireAdmin(); const result = await dialog.showOpenDialog(win, { title: '选择更新清单 update-manifest.json', properties: ['openFile'], filters: [{ name: '更新清单', extensions: ['json'] }] }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('update:saveSettings', async (_e, settings) => { requireAdmin(); return updateManager.saveSettings(settings); });
 ipcMain.handle('update:check', async (_e, source) => { requireAdmin(); if (activeTaskPromise) throw new Error('任务运行中暂不检查更新，避免影响生成效率'); return updateManager.check(source); });
-ipcMain.handle('update:install', async () => { requireAdmin(); if (activeTaskPromise) throw new Error('请先停止当前任务再安装更新'); await updateManager.install(); setTimeout(() => shutdownApplication().finally(() => app.quit()), 250); return true; });
+ipcMain.handle('update:install', async () => {
+  requireAdmin();
+  if (activeTaskPromise) throw new Error('请先停止当前任务再安装更新');
+  await updateManager.install();
+  win?.hide();
+  setTimeout(async () => {
+    // 正常清理最多等待5秒，避免浏览器连接或监控收尾让主进程一直不退出，
+    // 从而使安装助手永远等不到可替换文件的时机。
+    const forceExit = setTimeout(() => app.exit(0), 5000);
+    try { await shutdownApplication(); } catch {}
+    clearTimeout(forceExit);
+    app.exit(0);
+  }, 250);
+  return true;
+});

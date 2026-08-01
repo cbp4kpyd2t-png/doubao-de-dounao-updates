@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = '智能商品分析、挑剔审稿、单颜色轮换与六角度参考图逐图锁定；修复上传、五图保存和恢复流程。'
+  notes = 'Reliable updater launch, forced Electron shutdown, locked reference angles and creative analysis.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

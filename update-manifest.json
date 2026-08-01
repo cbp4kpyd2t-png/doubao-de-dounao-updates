@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.1",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.1/doubao-de-dounao-1.4.1-win-x64.zip",
-    "sha256":  "f393eba40d9afd741fbebb395f05375a4165589fc1ba43e05ef093f2be4681c0",
-    "notes":  "智能商品分析、挑剔审稿、单颜色轮换与六角度参考图逐图锁定；修复上传、五图保存和恢复流程。",
-    "publishedAt":  "2026-08-01T09:23:13.1177856Z"
+    "version":  "1.4.2",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.2/doubao-de-dounao-1.4.2-win-x64.zip",
+    "sha256":  "f1cafb0ec7d3da5c53d1ca61264d6fdf47fbb08833c51d8b3fb1a028e26c0106",
+    "notes":  "Reliable updater launch, forced Electron shutdown, locked reference angles and creative analysis.",
+    "publishedAt":  "2026-08-01T10:29:34.8436861Z"
 }

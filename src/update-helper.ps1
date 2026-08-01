@@ -32,10 +32,10 @@ function Remove-DirectoryBestEffort([string]$Target) {
 }
 
 Write-UpdateLog "installer started; parent=$ParentPid source=$SourceDir install=$InstallDir"
-try { Wait-Process -Id $ParentPid -Timeout 120 -ErrorAction SilentlyContinue } catch {}
+try { Wait-Process -Id $ParentPid -Timeout 20 -ErrorAction SilentlyContinue } catch {}
 
 $installPrefix = ([System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\') + '\')
-$deadline = (Get-Date).AddSeconds(90)
+$deadline = (Get-Date).AddSeconds(15)
 do {
   $remaining = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     $_.ProcessId -ne $PID -and $_.ExecutablePath -and
@@ -44,7 +44,19 @@ do {
   if ($remaining.Count -eq 0) { break }
   Start-Sleep -Milliseconds 500
 } while ((Get-Date) -lt $deadline)
-if ($remaining.Count -gt 0) { throw "等待旧版子进程退出超时：$($remaining.ProcessId -join ',')" }
+if ($remaining.Count -gt 0) {
+  Write-UpdateLog "forcing remaining app processes to exit: $($remaining.ProcessId -join ',')"
+  foreach ($process in $remaining) {
+    try { Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop }
+    catch { Write-UpdateLog "failed to stop process $($process.ProcessId): $($_.Exception.Message)" }
+  }
+  Start-Sleep -Milliseconds 1000
+  $stillRunning = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.ProcessId -ne $PID -and $_.ExecutablePath -and
+    ([System.IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase))
+  })
+  if ($stillRunning.Count -gt 0) { throw "无法关闭旧版残留进程：$($stillRunning.ProcessId -join ',')" }
+}
 
 $backupDir = "$InstallDir.update-backup"
 try {

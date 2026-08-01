@@ -201,7 +201,14 @@ class UpdateManager {
     const currentHelper = path.join(__dirname, 'update-helper.ps1').replace('app.asar', 'app.asar.unpacked');
     const helper = fs.existsSync(stagedHelper) ? stagedHelper : currentHelper;
     const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper, '-ParentPid', String(process.pid), '-SourceDir', this.readyUpdate.contentDir, '-InstallDir', this.installDir, '-ExecutableName', path.basename(this.executablePath)];
-    const child = spawn('powershell.exe', args, { detached: true, windowsHide: true, stdio: 'ignore' }); child.unref();
+    // spawn() 返回对象并不代表系统已经成功创建进程。必须等到 spawn 事件，
+    // 否则 PowerShell 被安全软件拦截或路径错误时，界面会误报“正在安装”。
+    await new Promise((resolve, reject) => {
+      const child = spawn('powershell.exe', args, { detached: true, windowsHide: true, stdio: 'ignore' });
+      const timer = setTimeout(() => { try { child.kill(); } catch {} reject(new Error('安装助手启动超时，请使用完整安装包升级')); }, 10000);
+      child.once('error', (error) => { clearTimeout(timer); reject(new Error(`安装助手启动失败：${error.message}`)); });
+      child.once('spawn', () => { clearTimeout(timer); child.unref(); resolve(); });
+    });
     this.status({ state: 'installing', message: '软件关闭后将完成更新并自动重新打开' }); return true;
   }
 }
