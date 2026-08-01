@@ -195,7 +195,10 @@ class TaskRunner extends EventEmitter {
           productState.aiVocabularyFingerprint = bundle.fingerprint;
           if (!ai.reused) productState.aiReanalyzedAt = new Date().toISOString();
         }
-        this.log(`AI差异化词库${ai.reused ? '已从缓存读取' : '已通过挑剔审稿'}：${product.name}`);
+        const aiStatus = ai.partial
+          ? `已保存到${ai.completedStage === 'observer' ? '生活观察阶段' : '候选词库阶段'}，下次从断点继续`
+          : (ai.reused ? '已从缓存读取' : '已通过挑剔审稿');
+        this.log(`AI差异化词库${aiStatus}：${product.name}`);
       } catch (error) {
         this.log(`AI差异化分析未完成，自动使用本地词库继续，不暂停任务：${error.message}`);
       }

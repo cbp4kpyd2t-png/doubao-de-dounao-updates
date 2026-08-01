@@ -208,53 +208,91 @@ async function ensureAiCreativeBank({ browser, product, facts, configDir, finger
   const analysisFile = path.join(configDir, AI_ANALYSIS_FILE);
   const bankFile = path.join(configDir, AI_BANK_FILE);
   const existing = await readJson(bankFile);
-  if (!force && existing?.schemaVersion === AI_SCHEMA_VERSION && existing.sourceFingerprint === fingerprint && existing.diversityStrength === diversityStrength && existing.approvedBank) {
+  if (!force && existing?.schemaVersion === AI_SCHEMA_VERSION && existing.sourceFingerprint === fingerprint && existing.diversityStrength === diversityStrength && existing.approvedBank && ['approved', 'usable-with-local-fallback'].includes(existing.status)) {
     const checked = validateBank(existing.approvedBank);
-    if (!checked.shortages.length) return { ...existing, approvedBank: checked.bank, reused: true };
+    return { ...existing, approvedBank: checked.bank, reused: true };
   }
   if (!browser?.connected || typeof browser.requestStructuredText !== 'function') throw new Error('当前Edge尚未连接，无法运行AI差异化分析');
 
-  log(`AI差异化分析：${product.name}，第1/3步生活观察`);
-  const observerRaw = await browser.requestStructuredText(buildObserverPrompt(facts), { images: product.images, timeoutSeconds: 180 });
-  const observer = parseMarkedJson(observerRaw);
+  const previousAnalysis = !force ? await readJson(analysisFile) : null;
+  const canResume = previousAnalysis?.schemaVersion === AI_SCHEMA_VERSION
+    && previousAnalysis.sourceFingerprint === fingerprint
+    && previousAnalysis.diversityStrength === diversityStrength;
+  let observer = canResume ? previousAnalysis.observer || null : null;
+  let director = canResume ? previousAnalysis.director || null : null;
+  let critic = null;
+  const threshold = diversityStrength === 'bold' ? 0.62 : diversityStrength === 'conservative' ? 0.82 : 0.72;
 
-  log(`AI差异化分析：${product.name}，第2/3步视觉词库`);
-  const directorRaw = await browser.requestStructuredText(buildDirectorPrompt(facts, observer), { timeoutSeconds: 180 });
-  const director = parseMarkedJson(directorRaw);
+  async function saveStage(stage, sourceBank, error = null) {
+    const localReview = localAuditBank(sourceBank, threshold);
+    const checked = validateBank(localReview.approvedBank);
+    const analysis = {
+      schemaVersion: AI_SCHEMA_VERSION,
+      sourceFingerprint: fingerprint,
+      diversityStrength,
+      generatedAt: new Date().toISOString(),
+      completedStage: stage,
+      observer,
+      director,
+      critic: critic ? {
+        rejected: Array.isArray(critic.rejected) ? critic.rejected.slice(0, 100) : [],
+        replacements: Array.isArray(critic.replacements) ? critic.replacements.slice(0, 100) : [],
+      } : null,
+      lastError: error ? String(error.message || error) : null,
+    };
+    const finalStage = stage === 'critic';
+    const result = {
+      schemaVersion: AI_SCHEMA_VERSION,
+      sourceFingerprint: fingerprint,
+      generatedAt: new Date().toISOString(),
+      status: finalStage ? (checked.shortages.length ? 'usable-with-local-fallback' : 'approved') : `partial-${stage}`,
+      completedStage: stage,
+      diversityStrength,
+      approvedBank: checked.bank,
+      aiRejected: analysis.critic?.rejected || [],
+      localRejected: localReview.rejected,
+      shortages: checked.shortages,
+      lastError: analysis.lastError,
+    };
+    await atomicWriteJson(analysisFile, analysis);
+    await atomicWriteJson(bankFile, result);
+    return result;
+  }
+
+  let stageResult = existing?.approvedBank ? { ...existing, reused: true } : null;
+  if (!observer) {
+    log(`AI差异化分析：${product.name}，第1/3步生活观察`);
+    const observerRaw = await browser.requestStructuredText(buildObserverPrompt(facts), { images: product.images, timeoutSeconds: 180 });
+    observer = parseMarkedJson(observerRaw);
+    stageResult = await saveStage('observer', observer);
+    log(`AI生活观察已立即保存：${product.name}`);
+  } else log(`AI差异化分析从已保存的生活观察继续：${product.name}`);
+
+  if (!director) {
+    try {
+      log(`AI差异化分析：${product.name}，第2/3步视觉词库`);
+      const directorRaw = await browser.requestStructuredText(buildDirectorPrompt(facts, observer), { timeoutSeconds: 180 });
+      director = parseMarkedJson(directorRaw);
+      stageResult = await saveStage('director', mergeBanks(observer, director));
+      log(`AI候选差异化词库已立即保存：${product.name}`);
+    } catch (error) {
+      stageResult = await saveStage('observer', observer, error);
+      log(`AI视觉词库暂未完成，已保留生活观察并继续图片任务：${error.message}`);
+      return { ...stageResult, reused: false, partial: true };
+    }
+  } else log(`AI差异化分析从已保存的候选词库继续：${product.name}`);
   const candidateBank = mergeBanks(observer, director);
 
-  log(`AI差异化分析：${product.name}，第3/3步挑剔审稿`);
-  const criticRaw = await browser.requestStructuredText(buildCriticPrompt(facts, candidateBank), { timeoutSeconds: 180 });
-  const critic = parseMarkedJson(criticRaw);
-  const aiApproved = applyCriticDecision(candidateBank, critic);
-  const threshold = diversityStrength === 'bold' ? 0.62 : diversityStrength === 'conservative' ? 0.82 : 0.72;
-  const localReview = localAuditBank(aiApproved, threshold);
-  const checked = validateBank(localReview.approvedBank);
-
-  const analysis = {
-    schemaVersion: AI_SCHEMA_VERSION,
-    sourceFingerprint: fingerprint,
-    generatedAt: new Date().toISOString(),
-    observer,
-    director,
-    critic: {
-      rejected: Array.isArray(critic.rejected) ? critic.rejected.slice(0, 100) : [],
-      replacements: Array.isArray(critic.replacements) ? critic.replacements.slice(0, 100) : [],
-    },
-  };
-  const result = {
-    schemaVersion: AI_SCHEMA_VERSION,
-    sourceFingerprint: fingerprint,
-    generatedAt: new Date().toISOString(),
-    status: checked.shortages.length ? 'usable-with-local-fallback' : 'approved',
-    diversityStrength,
-    approvedBank: checked.bank,
-    aiRejected: analysis.critic.rejected,
-    localRejected: localReview.rejected,
-    shortages: checked.shortages,
-  };
-  await atomicWriteJson(analysisFile, analysis);
-  await atomicWriteJson(bankFile, result);
+  try {
+    log(`AI差异化分析：${product.name}，第3/3步挑剔审稿`);
+    const criticRaw = await browser.requestStructuredText(buildCriticPrompt(facts, candidateBank), { timeoutSeconds: 180 });
+    critic = parseMarkedJson(criticRaw);
+  } catch (error) {
+    stageResult = await saveStage('director', candidateBank, error);
+    log(`AI挑剔审稿暂未完成，已使用并保留候选词库：${error.message}`);
+    return { ...stageResult, reused: false, partial: true };
+  }
+  const result = await saveStage('critic', applyCriticDecision(candidateBank, critic));
   return { ...result, reused: false };
 }
 

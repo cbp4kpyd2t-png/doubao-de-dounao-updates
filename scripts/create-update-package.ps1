@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Keeps every final prompt under 500 characters without clipped sentences, prioritizing complete dimensions, structure facts, five scenes, and output rules.'
+  notes = 'Saves AI creative analysis after every stage, resumes failed analysis from its checkpoint, and preserves specific product scenes and actions under 500 characters.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

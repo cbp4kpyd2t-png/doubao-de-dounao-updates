@@ -139,3 +139,50 @@ test('AI analysis runs three chats once, writes cache, then reuses the approved 
   assert.equal(second.reused, true);
   assert.equal(calls.length, 3);
 });
+
+test('AI每一步立即保存且失败后从断点继续而不重做生活观察', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dou-nao-ai-resume-'));
+  const product = { id: 'L002', name: '测试收纳架', dir, images: [path.join(dir, '1.png')] };
+  await fsp.writeFile(product.images[0], Buffer.from('image'));
+  const observer = {
+    audiences: ['家庭用户'], painPoints: ['台面杂乱'], usageMoments: ['备餐前'],
+    sellingPoints: ['分类收纳'], actions: ['把商品移到工作区'], spatialRelations: ['商品位于人物前方'],
+  };
+  let firstCalls = 0;
+  const interruptedBrowser = {
+    connected: true,
+    async requestStructuredText() {
+      firstCalls += 1;
+      if (firstCalls === 1) return marked(observer);
+      throw new Error('模拟第二阶段超时');
+    },
+  };
+  const partial = await ensureAiCreativeBank({
+    browser: interruptedBrowser, product, facts: facts(), configDir: dir,
+    fingerprint: 'fingerprint-resume', diversityStrength: 'balanced',
+  });
+  assert.equal(partial.partial, true);
+  assert.equal(partial.completedStage, 'observer');
+  assert.equal(firstCalls, 2);
+  const savedPartial = JSON.parse(await fsp.readFile(path.join(dir, '差异化词库.json'), 'utf8'));
+  assert.equal(savedPartial.status, 'partial-observer');
+
+  const director = completeBank();
+  const critic = { approvedBank: director, rejected: [], replacements: [] };
+  const resumeAnswers = [marked(director), marked(critic)];
+  const resumeCalls = [];
+  const resumeBrowser = {
+    connected: true,
+    async requestStructuredText(prompt, options) {
+      resumeCalls.push({ prompt, options });
+      return resumeAnswers[resumeCalls.length - 1];
+    },
+  };
+  const completed = await ensureAiCreativeBank({
+    browser: resumeBrowser, product, facts: facts(), configDir: dir,
+    fingerprint: 'fingerprint-resume', diversityStrength: 'balanced',
+  });
+  assert.equal(completed.status, 'approved');
+  assert.equal(resumeCalls.length, 2);
+  assert.equal(resumeCalls[0].options.images, undefined);
+});

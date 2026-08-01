@@ -281,7 +281,9 @@ function completePromptPart(value, maxLength, fallback = '') {
 
 function taskPrompt(task) {
   const a = task.angle;
-  return `图片${task.slot}：${completePromptPart(a.productOrientation, 8, '自然转向')}/${completePromptPart(a.cameraDirection, 8, '斜向机位')}；${completePromptPart(task.scene, 10, '高级真实场景')}；${completePromptPart(task.action, 10, '自然展示商品')}`;
+  const sceneFallbacks = ['住宅主场景', '窗边生活区', '专业使用区', '室内展示区', '户外生活区'];
+  const actionFallbacks = ['正面展示商品', '侧面观察商品', '整理使用空间', '展示核心用途', '完成使用后欣赏'];
+  return `图片${task.slot}：${completePromptPart(a.productOrientation, 8, '自然转向')}/${completePromptPart(a.cameraDirection, 12, '斜向机位')}；${completePromptPart(task.scene, 16, sceneFallbacks[task.slot - 1])}；${completePromptPart(task.action, 16, actionFallbacks[task.slot - 1])}`;
 }
 
 function angleLockPrompt(referenceSelection) {
