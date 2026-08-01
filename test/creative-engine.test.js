@@ -9,13 +9,14 @@ const {
   CONFIG_DIR_NAME,
   FIXED_FIVE_IMAGE_PROMPT,
   COMPACT_FACTS_MAX_LENGTH,
+  FINAL_PROMPT_MAX_LENGTH,
   compactFactsPrompt,
   buildCreativePlan,
   buildRoundPrompt,
   prepareProductCreativeFiles,
 } = require('../src/creative-engine');
 
-test('商品事实压缩为约100字并优先保留关键尺寸和禁错信息', () => {
+test('商品事实压缩为90字以内并优先保留关键尺寸和禁错信息', () => {
   const summary = compactFactsPrompt({
     productName: '测试双层置物架',
     quantity: 2,
@@ -98,12 +99,12 @@ test('round prompt uses cleaned facts, five distinct tasks, and mandatory five-i
   assert.match(prompt, /图片5/);
   assert.match(prompt, /第3轮/);
   assert.match(prompt, /整体采用暖金色调/);
-  assert.match(prompt, /依次生成5张独立的1:1图片/);
-  assert.match(prompt, /禁止拼图、网格、五宫格/);
+  assert.match(prompt, /依次生成5张独立1:1主图/);
+  assert.match(prompt, /禁止拼图、网格和多视角合集/);
   assert.ok(prompt.includes(FIXED_FIVE_IMAGE_PROMPT));
   assert.equal((prompt.match(/图片\d：/g) || []).length, 5);
   assert.doesNotMatch(prompt, /季节与天气|可选动物元素|色彩关系|光线与道具|销售作用/);
-  assert.ok(prompt.length < 2600);
+  assert.ok(prompt.length <= FINAL_PROMPT_MAX_LENGTH);
 });
 
 test('round prompt locks five outputs to five positions from one contact sheet', async () => {
@@ -114,9 +115,9 @@ test('round prompt locks five outputs to five positions from one contact sheet',
     selectedColorLabel: '粉色',
     lockedAnglePositions: ['左上', '上中', '右上', '左下', '下中'],
   });
-  assert.match(prompt, /角度锁定（优先）/);
-  assert.match(prompt, /图片1至5依次锁定合成图的左上、上中、右上、左下、下中视角/);
-  assert.match(prompt, /禁止融合、镜像、拼接或重复其他视角/);
+  assert.match(prompt, /角度锁定：仅用“粉色”/);
+  assert.match(prompt, /图片1-5依次采用左上、上中、右上、左下、下中/);
+  assert.match(prompt, /禁止融合\/镜像\/拼接/);
 });
 
 test('unchanged sources are reused; changed sources archive the previous managed version', async () => {

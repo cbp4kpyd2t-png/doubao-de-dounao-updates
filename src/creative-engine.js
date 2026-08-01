@@ -7,12 +7,7 @@ const CREATIVE_ENGINE_VERSION = 3;
 const CONFIG_DIR_NAME = '豆脑配置';
 const CUSTOM_REQUIREMENTS_FILE = '创意要求.txt';
 
-const FIXED_FIVE_IMAGE_PROMPT = `【统一输出】
-严格依据参考图，依次生成5张独立的1:1图片；每次只输出1张，完成后自动继续，直至5张全部生成。
-禁止拼图、网格、五宫格、多视角合集或只描述方案。五张必须采用明显不同的角度与构图。
-每张商品都要完整清晰、尺寸合理并成为第一视觉主体；人物正脸可见，五张使用不同人脸，且不得遮挡商品。
-保持商品形状、颜色、材质、结构、部件数量、尺寸比例和关键细节；禁止增删功能或配件。
-禁止文字、Logo、水印、价格、徽章、边框和平台界面。`;
+const FIXED_FIVE_IMAGE_PROMPT = '输出：依次生成5张独立1:1主图，每次1张并自动继续；禁止拼图、网格和多视角合集。商品完整醒目，结构比例严格按参考图；五张人物正脸且不同，不遮挡商品；禁文字、Logo、水印和虚构配件。';
 
 const PERSON_TYPES = ['年轻女性', '年轻男性', '中年女性', '中年男性', '优雅女性', '成熟男性', '时尚女性', '休闲男性', '家庭主理人', '专业使用者'];
 const APPAREL = ['浅色高级家居服', '深色简约休闲装', '米白针织服装', '低饱和亚麻服装', '现代都市休闲装', '优雅轻奢服装', '自然户外服装', '整洁工作服', '柔和暖色服装', '高级黑白配服装'];
@@ -50,7 +45,8 @@ function unique(values) { return [...new Set(values.filter(Boolean).map((value) 
 function choose(values, index, fallback) { return values.length ? values[index % values.length] : fallback; }
 function profileFor(name) { return PROFILE_RULES.find((profile) => profile.match.test(name)) || { scenes: LUXURY_SCENES, actions: ['人物正在真实使用商品', '人物在商品旁展示', '用手操作商品', '把商品放入真实环境', '人物完成使用后欣赏效果'], props: ['高级家具、艺术装饰和生活用品', '宠物、绿植和丰富生活道具'], benefits: ['用途表达直观', '融入真实生活场景', '商品完整醒目'] }; }
 
-const COMPACT_FACTS_MAX_LENGTH = 110;
+const COMPACT_FACTS_MAX_LENGTH = 90;
+const FINAL_PROMPT_MAX_LENGTH = 500;
 
 function cleanFactFragment(value) {
   return String(value || '')
@@ -274,26 +270,36 @@ function factsPrompt(facts) {
   return compactFactsPrompt(facts);
 }
 
+function clipPromptPart(value, maxLength) {
+  const text = String(value || '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return text.length <= maxLength ? text : `${text.slice(0, Math.max(1, maxLength - 1))}…`;
+}
+
 function taskPrompt(task) {
   const a = task.angle;
-  return `图片${task.slot}：\n- 镜头：商品${a.productOrientation}；${a.cameraDirection}；${a.elevation}；${a.distance}\n- 场景动作：${task.scene}；${task.person}；${task.action}\n- 卖点：${task.sellingPoint}\n- 要求：${task.personMode}；商品完整醒目、比例真实、不可遮挡`;
+  return `图片${task.slot}：${clipPromptPart(a.productOrientation, 8)}/${clipPromptPart(a.cameraDirection, 8)}；${clipPromptPart(task.scene, 10)}；${clipPromptPart(task.action, 10)}`;
 }
 
 function angleLockPrompt(referenceSelection) {
   const positions = referenceSelection?.lockedAnglePositions || [];
   if (!referenceSelection?.selectedRootContactSheet || positions.length !== 5) return '';
   const color = referenceSelection.selectedColorLabel || '当前参考图颜色';
-  return [
-    '【角度锁定（优先）】',
-    `本轮仅使用“${color}”版本。图片1至5依次锁定合成图的${positions.join('、')}视角。`,
-    '每张只采用指定视角；禁止融合、镜像、拼接或重复其他视角。其他参考图只用于核对真实结构。'
-  ].join('\n');
+  return `角度锁定：仅用“${clipPromptPart(color, 8)}”；图片1-5依次采用${positions.join('、')}，禁止融合/镜像/拼接。`;
 }
 
 function buildRoundPrompt(facts, plan, round, globalRequirements = '', referenceSelection = null) {
   const selected = plan.tasks.filter((task) => task.round === round);
   if (selected.length !== 5) throw new Error(`第${round}轮创意任务不是5张`);
-  return [`【商品事实（已从原TXT安全提取，原文件未修改）】`, factsPrompt(facts), angleLockPrompt(referenceSelection), globalRequirements ? `【本批次补充创意要求】\n${globalRequirements.trim()}` : '', `【第${round}轮五张差异化创意任务】`, ...selected.map(taskPrompt), FIXED_FIVE_IMAGE_PROMPT].filter(Boolean).join('\n\n');
+  const prompt = [
+    factsPrompt(facts),
+    angleLockPrompt(referenceSelection),
+    globalRequirements ? `补充：${clipPromptPart(globalRequirements, 36)}` : '',
+    `第${round}轮：`,
+    ...selected.map(taskPrompt),
+    FIXED_FIVE_IMAGE_PROMPT,
+  ].filter(Boolean).join('\n');
+  if (prompt.length > FINAL_PROMPT_MAX_LENGTH) throw new Error(`最终提示词超过${FINAL_PROMPT_MAX_LENGTH}字：${prompt.length}`);
+  return prompt;
 }
 
 async function atomicWrite(file, content) {
@@ -346,4 +352,4 @@ async function prepareProductCreativeFiles(product, options = {}) {
   return { configDir, fingerprint, sourceChanged, facts, plan };
 }
 
-module.exports = { CREATIVE_ENGINE_VERSION, CONFIG_DIR_NAME, CUSTOM_REQUIREMENTS_FILE, FIXED_FIVE_IMAGE_PROMPT, COMPACT_FACTS_MAX_LENGTH, normalizeProductName, quantityCandidates, extractProductFacts, compactFactsPrompt, buildCreativePlan, buildRoundPrompt, prepareProductCreativeFiles, sourceFingerprint };
+module.exports = { CREATIVE_ENGINE_VERSION, CONFIG_DIR_NAME, CUSTOM_REQUIREMENTS_FILE, FIXED_FIVE_IMAGE_PROMPT, COMPACT_FACTS_MAX_LENGTH, FINAL_PROMPT_MAX_LENGTH, normalizeProductName, quantityCandidates, extractProductFacts, compactFactsPrompt, buildCreativePlan, buildRoundPrompt, prepareProductCreativeFiles, sourceFingerprint };
