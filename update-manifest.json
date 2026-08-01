@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.7",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.7/doubao-de-dounao-1.4.7-win-x64.zip",
-    "sha256":  "ce1e2541cab373b6ec8fb98bd32c6aa9f8b178be63701cc098c27529e706f816",
-    "notes":  "Limits every final five-image GPT prompt to 500 Chinese characters while preserving product identity, five distinct scenes, and output rules.",
-    "publishedAt":  "2026-08-01T15:01:45.4821668Z"
+    "version":  "1.4.8",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.8/doubao-de-dounao-1.4.8-win-x64.zip",
+    "sha256":  "6e2bfad211142386d209abfd38364d5fd30b96f4485b46fa3f7716b2be4ef517",
+    "notes":  "Keeps every final prompt under 500 characters without clipped sentences, prioritizing complete dimensions, structure facts, five scenes, and output rules.",
+    "publishedAt":  "2026-08-01T15:15:07.5525378Z"
 }
