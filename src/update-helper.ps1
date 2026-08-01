@@ -2,13 +2,15 @@ param(
   [Parameter(Mandatory=$true)][int]$ParentPid,
   [Parameter(Mandatory=$true)][string]$SourceDir,
   [Parameter(Mandatory=$true)][string]$InstallDir,
-  [Parameter(Mandatory=$true)][string]$ExecutableName
+  [Parameter(Mandatory=$true)][string]$ExecutableName,
+  [string]$LogFile = '',
+  [string]$LaunchMarker = ''
 )
 $ErrorActionPreference = 'Stop'
-$logFile = Join-Path (Split-Path -Parent $SourceDir) 'install.log'
+if (-not $LogFile) { $LogFile = Join-Path (Split-Path -Parent $SourceDir) 'install.log' }
 
 function Write-UpdateLog([string]$Message) {
-  try { Add-Content -LiteralPath $logFile -Value "$(Get-Date -Format o) $Message" -Encoding UTF8 } catch {}
+  try { Add-Content -LiteralPath $LogFile -Value "$(Get-Date -Format o) $Message" -Encoding UTF8 } catch {}
 }
 
 function Copy-DirectoryContents([string]$From, [string]$To, [int]$Attempts = 6) {
@@ -32,8 +34,10 @@ function Remove-DirectoryBestEffort([string]$Target) {
 }
 
 Write-UpdateLog "installer started; parent=$ParentPid source=$SourceDir install=$InstallDir"
-try { Wait-Process -Id $ParentPid -Timeout 20 -ErrorAction SilentlyContinue } catch {}
-
+if ($LaunchMarker) {
+  try { Set-Content -LiteralPath $LaunchMarker -Value "started $(Get-Date -Format o) pid=$PID" -Encoding ASCII }
+  catch { Write-UpdateLog "failed to create launch marker: $($_.Exception.Message)"; throw }
+}
 $installPrefix = ([System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\') + '\')
 $deadline = (Get-Date).AddSeconds(15)
 do {
@@ -55,7 +59,7 @@ if ($remaining.Count -gt 0) {
     $_.ProcessId -ne $PID -and $_.ExecutablePath -and
     ([System.IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase))
   })
-  if ($stillRunning.Count -gt 0) { throw "无法关闭旧版残留进程：$($stillRunning.ProcessId -join ',')" }
+  if ($stillRunning.Count -gt 0) { throw "Unable to stop old application processes: $($stillRunning.ProcessId -join ',')" }
 }
 
 $backupDir = "$InstallDir.update-backup"
@@ -65,7 +69,7 @@ try {
   if (Test-Path -LiteralPath $InstallDir) { Copy-DirectoryContents $InstallDir $backupDir }
   Copy-DirectoryContents $SourceDir $InstallDir
   $exe = Join-Path $InstallDir $ExecutableName
-  if (-not (Test-Path -LiteralPath $exe)) { throw "更新后未找到程序：$exe" }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "Updated executable was not found: $exe" }
   Write-UpdateLog 'installation completed successfully'
   Remove-DirectoryBestEffort $backupDir
   Start-Process -FilePath $exe -WorkingDirectory $InstallDir

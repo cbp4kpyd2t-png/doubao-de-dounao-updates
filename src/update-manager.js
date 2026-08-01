@@ -70,6 +70,11 @@ function updateRequestOptions() {
   return { headers: { 'User-Agent': 'EcommerceMainImageGenerator-Updater' }, ...(proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {}) };
 }
 function localPath(value) { return /^file:\/\//i.test(String(value || '')) ? fileURLToPath(value) : path.resolve(String(value || '')); }
+function quoteWindowsCommandArg(value) {
+  const text = String(value ?? '');
+  return `"${text.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
+}
+function quotePowerShellLiteral(value) { return `'${String(value ?? '').replaceAll("'", "''")}'`; }
 function resolvePackageSource(manifestSource, packageValue) {
   if (isHttps(packageValue) || /^file:\/\//i.test(packageValue) || path.isAbsolute(packageValue)) return packageValue;
   if (isHttps(manifestSource)) return new URL(packageValue, manifestSource).href;
@@ -200,17 +205,38 @@ class UpdateManager {
     const stagedHelper = path.join(this.readyUpdate.contentDir, 'resources', 'app.asar.unpacked', 'src', 'update-helper.ps1');
     const currentHelper = path.join(__dirname, 'update-helper.ps1').replace('app.asar', 'app.asar.unpacked');
     const helper = fs.existsSync(stagedHelper) ? stagedHelper : currentHelper;
-    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper, '-ParentPid', String(process.pid), '-SourceDir', this.readyUpdate.contentDir, '-InstallDir', this.installDir, '-ExecutableName', path.basename(this.executablePath)];
-    // spawn() 返回对象并不代表系统已经成功创建进程。必须等到 spawn 事件，
-    // 否则 PowerShell 被安全软件拦截或路径错误时，界面会误报“正在安装”。
-    await new Promise((resolve, reject) => {
-      const child = spawn('powershell.exe', args, { detached: true, windowsHide: true, stdio: 'ignore' });
-      const timer = setTimeout(() => { try { child.kill(); } catch {} reject(new Error('安装助手启动超时，请使用完整安装包升级')); }, 10000);
-      child.once('error', (error) => { clearTimeout(timer); reject(new Error(`安装助手启动失败：${error.message}`)); });
-      child.once('spawn', () => { clearTimeout(timer); child.unref(); resolve(); });
+    const updateDir = path.dirname(this.readyUpdate.contentDir);
+    const launchMarker = path.join(updateDir, 'installer-started.flag');
+    const logFile = path.join(updateDir, 'install.log');
+    await fsp.rm(launchMarker, { force: true }).catch(() => {});
+    // Electron may run inside a Windows Job object, which can terminate normal
+    // and detached children together with the app. Task Scheduler creates the
+    // updater outside that process tree. A BOM-prefixed bootstrap file keeps all
+    // Unicode paths reliable and keeps /TR below its 261-character limit.
+    const updaterScript = `$ErrorActionPreference = 'Stop'\r\n& ${quotePowerShellLiteral(helper)} -ParentPid ${process.pid} -SourceDir ${quotePowerShellLiteral(this.readyUpdate.contentDir)} -InstallDir ${quotePowerShellLiteral(this.installDir)} -ExecutableName ${quotePowerShellLiteral(path.basename(this.executablePath))} -LogFile ${quotePowerShellLiteral(logFile)} -LaunchMarker ${quotePowerShellLiteral(launchMarker)}\r\n`;
+    const bootstrapFile = path.join(updateDir, 'launch-update.ps1');
+    await fsp.writeFile(bootstrapFile, `\uFEFF${updaterScript}`, 'utf8');
+    const powershellExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const taskName = `DoubaoUpdater-${process.pid}-${Date.now()}`;
+    const taskCommand = `${quoteWindowsCommandArg(powershellExe)} -NoProfile -ExecutionPolicy Bypass -File ${quoteWindowsCommandArg(bootstrapFile)}`;
+    const runTaskCommand = (taskArgs, failureMessage) => new Promise((resolve, reject) => {
+      const child = spawn('schtasks.exe', taskArgs, { windowsHide: true, stdio: 'ignore' });
+      child.once('error', (error) => reject(new Error(`${failureMessage}：${error.message}`)));
+      child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`${failureMessage}：${code}`)));
     });
+    try {
+      await runTaskCommand(['/Create', '/TN', taskName, '/TR', taskCommand, '/SC', 'ONCE', '/ST', '23:59', '/F'], '无法创建安装任务');
+      await runTaskCommand(['/Run', '/TN', taskName], '无法启动安装任务');
+    } catch (error) {
+      spawn('schtasks.exe', ['/Delete', '/TN', taskName, '/F'], { windowsHide: true, stdio: 'ignore' }).unref();
+      throw error;
+    }
+    const handshakeDeadline = Date.now() + 10000;
+    while (Date.now() < handshakeDeadline && !fs.existsSync(launchMarker)) await wait(100);
+    spawn('schtasks.exe', ['/Delete', '/TN', taskName, '/F'], { windowsHide: true, stdio: 'ignore' }).unref();
+    if (!fs.existsSync(launchMarker)) throw new Error(`安装助手启动超时，请查看日志：${logFile}`);
     this.status({ state: 'installing', message: '软件关闭后将完成更新并自动重新打开' }); return true;
   }
 }
 
-module.exports = { UpdateManager, compareVersions, resolvePackageSource, sha256File, removeWithRetries, createUpdateWorkDir, readyUpdateIsUsable, normalizeProxyUrl, getWindowsProxyUrl, DEFAULT_UPDATE_SOURCE };
+module.exports = { UpdateManager, compareVersions, resolvePackageSource, sha256File, removeWithRetries, createUpdateWorkDir, readyUpdateIsUsable, normalizeProxyUrl, getWindowsProxyUrl, quoteWindowsCommandArg, quotePowerShellLiteral, DEFAULT_UPDATE_SOURCE };

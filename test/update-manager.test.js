@@ -88,13 +88,22 @@ test('安装优先使用新包内助手并等待全部旧版子进程退出', ()
   const helperSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'update-helper.ps1'), 'utf8');
   assert.match(managerSource, /const stagedHelper = path\.join\(this\.readyUpdate\.contentDir/);
   assert.match(managerSource, /fs\.existsSync\(stagedHelper\) \? stagedHelper : currentHelper/);
-  assert.match(managerSource, /child\.once\('spawn'/);
   assert.match(managerSource, /安装助手启动超时/);
+  assert.match(managerSource, /installer-started\.flag/);
+  assert.match(managerSource, /安装助手启动超时/);
+  assert.match(managerSource, /launch-update\.ps1/);
+  assert.match(managerSource, /\\uFEFF/);
+  assert.match(managerSource, /schtasks\.exe/);
+  assert.match(managerSource, /'\/Create'/);
+  assert.match(managerSource, /'\/Run'/);
+  assert.doesNotMatch(managerSource, /detached:\s*true/);
   assert.match(helperSource, /Get-CimInstance Win32_Process/);
   assert.match(helperSource, /StartsWith\(\$installPrefix/);
   assert.match(helperSource, /Stop-Process -Id \$process\.ProcessId -Force/);
   assert.match(helperSource, /Copy-DirectoryContents/);
   assert.match(helperSource, /install\.log/);
+  assert.match(helperSource, /Set-Content -LiteralPath \$LaunchMarker/);
+  assert.doesNotMatch(helperSource, /[^\x00-\x7F]/, 'Windows PowerShell 5 requires the detached helper to stay ASCII-safe without a BOM');
 });
 
 test('安装更新时主进程有五秒退出兜底，避免安装助手永久等待', () => {
