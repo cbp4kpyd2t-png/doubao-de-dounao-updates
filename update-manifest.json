@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.6",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.6/doubao-de-dounao-1.4.6-win-x64.zip",
-    "sha256":  "f2816b8a0100fa29c08e85e221ebdc16c832d7750d835163f35a2d58d1b600f0",
-    "notes":  "Adds an L063 manual-prompt-only mode that sends only the user-authored prompt and bypasses product facts, AI analysis, and DouNao configuration.",
-    "publishedAt":  "2026-08-01T14:32:25.9499825Z"
+    "version":  "1.4.7",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.7/doubao-de-dounao-1.4.7-win-x64.zip",
+    "sha256":  "ce1e2541cab373b6ec8fb98bd32c6aa9f8b178be63701cc098c27529e706f816",
+    "notes":  "Limits every final five-image GPT prompt to 500 Chinese characters while preserving product identity, five distinct scenes, and output rules.",
+    "publishedAt":  "2026-08-01T15:01:45.4821668Z"
 }
