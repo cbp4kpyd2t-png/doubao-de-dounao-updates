@@ -59,7 +59,7 @@ function cleanFactFragment(value) {
 
 function splitFactFragments(value) {
   return String(value || '')
-    .split(/[。；;\r\n]+/u)
+    .split(/[。；;，,\r\n]+/u)
     .map((part) => cleanFactFragment(part).replace(/^\d+[.、]\s*/, ''))
     .filter((part) => part && !/^【.*】$/.test(part));
 }
@@ -79,7 +79,7 @@ function compactFactsPrompt(facts, maxLength = COMPACT_FACTS_MAX_LENGTH) {
       const original = candidates.find((item) => cleanFactFragment(item.value) === value);
       let score = original?.score || 0;
       if (/(必须|禁止|不得|只能|不能)/.test(value)) score += 20;
-      if (/(尺寸|厘米|cm|mm|长|宽|高|厚|比例|\d)/i.test(value)) score += 15;
+      if (/(尺寸|厘米|cm|mm|长|宽|高|厚|比例|\d)/i.test(value)) score += 35;
       if (/(材质|颜色|结构|孔|层|把手|支撑|抽拉|数量)/.test(value)) score += 10;
       return { value, score };
     })
@@ -92,10 +92,6 @@ function compactFactsPrompt(facts, maxLength = COMPACT_FACTS_MAX_LENGTH) {
     const remaining = limit - suffix.length - summary.length - separator.length;
     if (remaining <= 4) break;
     if (item.value.length <= remaining) summary += `${separator}${item.value}`;
-    else {
-      summary += `${separator}${item.value.slice(0, Math.max(1, remaining - 1))}…`;
-      break;
-    }
   }
   if (summary.endsWith('关键：')) summary = summary.slice(0, -3);
   return `${summary}${suffix}`.slice(0, limit);
@@ -270,21 +266,29 @@ function factsPrompt(facts) {
   return compactFactsPrompt(facts);
 }
 
-function clipPromptPart(value, maxLength) {
+function completePromptPart(value, maxLength, fallback = '') {
   const text = String(value || '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return text.length <= maxLength ? text : `${text.slice(0, Math.max(1, maxLength - 1))}…`;
+  if (text.length <= maxLength) return text;
+  const fragments = text.split(/[。；;，,]+/u).map((item) => item.trim()).filter(Boolean);
+  let result = '';
+  for (const fragment of fragments) {
+    if (fragment.length > maxLength) continue;
+    const candidate = result ? `${result}；${fragment}` : fragment;
+    if (candidate.length <= maxLength) result = candidate;
+  }
+  return result || fallback;
 }
 
 function taskPrompt(task) {
   const a = task.angle;
-  return `图片${task.slot}：${clipPromptPart(a.productOrientation, 8)}/${clipPromptPart(a.cameraDirection, 8)}；${clipPromptPart(task.scene, 10)}；${clipPromptPart(task.action, 10)}`;
+  return `图片${task.slot}：${completePromptPart(a.productOrientation, 8, '自然转向')}/${completePromptPart(a.cameraDirection, 8, '斜向机位')}；${completePromptPart(task.scene, 10, '高级真实场景')}；${completePromptPart(task.action, 10, '自然展示商品')}`;
 }
 
 function angleLockPrompt(referenceSelection) {
   const positions = referenceSelection?.lockedAnglePositions || [];
   if (!referenceSelection?.selectedRootContactSheet || positions.length !== 5) return '';
   const color = referenceSelection.selectedColorLabel || '当前参考图颜色';
-  return `角度锁定：仅用“${clipPromptPart(color, 8)}”；图片1-5依次采用${positions.join('、')}，禁止融合/镜像/拼接。`;
+  return `角度锁定：仅用“${completePromptPart(color, 8, '当前颜色')}”；图片1-5依次采用${positions.join('、')}，禁止融合/镜像/拼接。`;
 }
 
 function buildRoundPrompt(facts, plan, round, globalRequirements = '', referenceSelection = null) {
@@ -293,7 +297,7 @@ function buildRoundPrompt(facts, plan, round, globalRequirements = '', reference
   const prompt = [
     factsPrompt(facts),
     angleLockPrompt(referenceSelection),
-    globalRequirements ? `补充：${clipPromptPart(globalRequirements, 36)}` : '',
+    globalRequirements ? `补充：${completePromptPart(globalRequirements, 36, '保持商品真实并突出主体')}` : '',
     `第${round}轮：`,
     ...selected.map(taskPrompt),
     FIXED_FIVE_IMAGE_PROMPT,

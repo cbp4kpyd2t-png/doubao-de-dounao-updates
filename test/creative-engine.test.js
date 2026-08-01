@@ -31,6 +31,7 @@ test('商品事实压缩为90字以内并优先保留关键尺寸和禁错信息
   assert.match(summary, /37×25×33厘米/);
   assert.match(summary, /禁改/);
   assert.match(summary, /主体完整突出/);
+  assert.doesNotMatch(summary, /…/);
 });
 
 async function fixture(name = 'L043叠衣板主图', text = '这是叠衣板，15个一组。另一处写30个一组。严格以已上传的置物架参考图为准。') {
@@ -104,6 +105,7 @@ test('round prompt uses cleaned facts, five distinct tasks, and mandatory five-i
   assert.ok(prompt.includes(FIXED_FIVE_IMAGE_PROMPT));
   assert.equal((prompt.match(/图片\d：/g) || []).length, 5);
   assert.doesNotMatch(prompt, /季节与天气|可选动物元素|色彩关系|光线与道具|销售作用/);
+  assert.doesNotMatch(prompt, /…/);
   assert.ok(prompt.length <= FINAL_PROMPT_MAX_LENGTH);
 });
 

@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Limits every final five-image GPT prompt to 500 Chinese characters while preserving product identity, five distinct scenes, and output rules.'
+  notes = 'Keeps every final prompt under 500 characters without clipped sentences, prioritizing complete dimensions, structure facts, five scenes, and output rules.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8
