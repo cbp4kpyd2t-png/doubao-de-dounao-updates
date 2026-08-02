@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const os = require('node:os');
 const path = require('node:path');
-const { parseTaggedVocabulary, loadTaggedVocabulary, TAGGED_VOCABULARY_FILE } = require('../src/tagged-vocabulary');
+const { parseTaggedVocabulary, loadTaggedVocabulary, TAGGED_VOCABULARY_FILE, TEMPLATE } = require('../src/tagged-vocabulary');
 
 const SAMPLE = `L999 测试商品
 锁=黑色｜双层
@@ -29,6 +29,10 @@ test('极简词库支持带标签联动、重复字段追加和数字字段名',
   assert.equal(bank.locks[0], '黑色');
   assert.deepEqual(bank.fixedWords, ['双层结构', '正面抽拉']);
   assert.ok(bank.sourceFingerprint.length === 64);
+});
+
+test('新词库模板强制五张更换人物、人种、人脸和服装', () => {
+  assert.match(TEMPLATE, /五张必须使用不同人物、不同人种、不同人脸、不同服装/);
 });
 
 test('场景和动作标签不对称时给出明确错误', () => {

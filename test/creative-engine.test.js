@@ -97,7 +97,7 @@ test('极简词库按同标签组合并把正脸大人物设为硬约束', async
   const first = await prepareProductCreativeFiles(item.product, { cycle: 1 });
   await fsp.writeFile(path.join(first.configDir, '极简词库.txt'), `L999 测试收纳架
 锁=黑色｜双层
-人物锁=清晰正脸｜人物大比例
+人物锁=清晰正脸｜人物大比例｜五张必须使用不同人物、不同人种、不同人脸、不同服装
 固定词=双层结构｜正面抽拉
 动机=快速收纳
 受众=家庭用户
@@ -120,7 +120,8 @@ test('极简词库按同标签组合并把正脸大人物设为硬约束', async
   const prompt = buildRoundPrompt(facts, plan, 1);
   assert.match(prompt, /词库硬锁：黑色、双层、清晰正脸、人物大比例/);
   assert.match(prompt, /禁错：虚构第三层、人物背脸/);
-  assert.match(prompt, /人物清晰正脸、画面占比大/);
+  assert.match(prompt, /人物清晰正脸、占比大/);
+  assert.match(prompt, /五张必须使用不同人物、不同人种、不同人脸、不同服装/);
   assert.match(prompt, /必带：双层结构、正面抽拉/);
   assert.ok(prompt.length <= FINAL_PROMPT_MAX_LENGTH);
 });
@@ -133,8 +134,8 @@ test('round prompt uses cleaned facts, five distinct tasks, and mandatory five-i
   assert.match(prompt, /图片5/);
   assert.match(prompt, /第3轮/);
   assert.match(prompt, /整体采用暖金色调/);
-  assert.match(prompt, /依次生成5张独立1:1主图/);
-  assert.match(prompt, /禁止拼图、网格和多视角合集/);
+  assert.match(prompt, /输出5张独立1:1主图/);
+  assert.match(prompt, /禁拼图\/网格\/合集/);
   assert.ok(prompt.includes(FIXED_FIVE_IMAGE_PROMPT));
   assert.equal((prompt.match(/图片\d：/g) || []).length, 5);
   assert.doesNotMatch(prompt, /季节与天气|可选动物元素|色彩关系|光线与道具|销售作用/);

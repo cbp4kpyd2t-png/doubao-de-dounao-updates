@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Adds per-product tagged vocabulary files, linked scene/action/relation/camera combinations, product-specific fixed words, and mandatory clear front-facing large people while keeping prompts within 500 characters.'
+  notes = 'Forces all five images to use different people, ethnicities, faces, and clothing; keeps clear front-facing large people and all product-specific prompts within 500 Chinese characters.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

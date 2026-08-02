@@ -1,6 +1,8 @@
 const fsp = require('node:fs').promises;
 const path = require('node:path');
 
+const PERSON_DIVERSITY_LOCK = '五张必须使用不同人物、不同人种、不同人脸、不同服装';
+
 const FIXED_WORDS = {
   L042: ['钉孔入土', 'L形卷带'],
   L043: ['一板一衣', '前端翻页'],
@@ -34,22 +36,36 @@ const FIXED_WORDS = {
 async function main() {
   const [sourceDir] = process.argv.slice(2);
   if (!sourceDir) throw new Error('用法：node scripts/set-product-fixed-words.js <极简词库目录>');
-  const files = await fsp.readdir(sourceDir, { withFileTypes: true });
+  const entries = await fsp.readdir(sourceDir, { withFileTypes: true });
+  const directFiles = entries
+    .filter((entry) => entry.isFile() && /^L\d+.*\.txt$/iu.test(entry.name))
+    .map((entry) => ({ name: entry.name, file: path.join(sourceDir, entry.name) }));
+  const productFiles = [];
+  for (const entry of entries.filter((item) => item.isDirectory() && /^L\d+/iu.test(item.name))) {
+    const file = path.join(sourceDir, entry.name, '豆脑配置', '极简词库.txt');
+    try { await fsp.access(file); productFiles.push({ name: entry.name, file }); } catch {}
+  }
+  const files = [...directFiles, ...productFiles];
   const updated = [];
-  for (const item of files.filter((entry) => entry.isFile() && /^L\d+.*\.txt$/iu.test(entry.name))) {
+  for (const item of files) {
     const code = item.name.match(/^L\d+/iu)[0].toUpperCase();
     if (code === 'L063') continue;
     const words = FIXED_WORDS[code];
     if (!words) throw new Error(`${code}没有配置商品独立固定词`);
-    const file = path.join(sourceDir, item.name);
+    const file = item.file;
     const original = await fsp.readFile(file, 'utf8');
     const fixedLine = `固定词=${words.join('｜')}`;
     let next;
     if (/^固定词=.*$/mu.test(original)) next = original.replace(/^固定词=.*$/mu, fixedLine);
     else next = original.replace(/^(人物锁=.*)$/mu, `$1\n${fixedLine}`);
+    next = next.replace(/^人物锁=(.*)$/mu, (_line, value) => {
+      const locks = value.split('｜').map((item) => item.trim()).filter(Boolean);
+      if (!locks.includes(PERSON_DIVERSITY_LOCK)) locks.push(PERSON_DIVERSITY_LOCK);
+      return `人物锁=${locks.join('｜')}`;
+    });
     if (next === original && !original.includes(fixedLine)) throw new Error(`${item.name}找不到“人物锁=”插入位置`);
     await fsp.writeFile(file, next, 'utf8');
-    updated.push(`${code}:${words.join('、')}`);
+    updated.push(`${code}:${words.join('、')}；${PERSON_DIVERSITY_LOCK}`);
   }
   process.stdout.write(`${JSON.stringify({ updatedCount: updated.length, updated }, null, 2)}\n`);
 }

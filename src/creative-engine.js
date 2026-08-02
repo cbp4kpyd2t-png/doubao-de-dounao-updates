@@ -8,7 +8,7 @@ const CREATIVE_ENGINE_VERSION = 4;
 const CONFIG_DIR_NAME = '豆脑配置';
 const CUSTOM_REQUIREMENTS_FILE = '创意要求.txt';
 
-const FIXED_FIVE_IMAGE_PROMPT = '输出：依次生成5张独立1:1主图，每次1张并自动继续；禁止拼图、网格和多视角合集。商品完整醒目，结构比例严格按参考图；五张人物清晰正脸、画面占比大且不同，不遮挡商品；禁文字、Logo、水印和虚构配件。';
+const FIXED_FIVE_IMAGE_PROMPT = '输出5张独立1:1主图，逐张生成；禁拼图/网格/合集。商品完整醒目，结构比例照参考图；五张人物清晰正脸、占比大、互不相同、不遮商品；禁文字、Logo、水印、虚构配件。';
 
 const PERSON_TYPES = ['年轻女性', '年轻男性', '中年女性', '中年男性', '优雅女性', '成熟男性', '时尚女性', '休闲男性', '家庭主理人', '专业使用者'];
 const APPAREL = ['浅色高级家居服', '深色简约休闲装', '米白针织服装', '低饱和亚麻服装', '现代都市休闲装', '优雅轻奢服装', '自然户外服装', '整洁工作服', '柔和暖色服装', '高级黑白配服装'];
@@ -321,7 +321,7 @@ function taggedFactsPrompt(facts, plan) {
   if (!plan.vocabularyRules) return factsPrompt(facts);
   const name = completePromptPart(facts?.productName, 24, '商品');
   const quantity = facts?.quantity ? `；数量${facts.quantity}` : '';
-  return `商品：${name}；参考图为唯一身份锚点${quantity}；结构数量比例按参考图，主体完整醒目。`;
+  return `商品：${name}${quantity}；参考图唯一；结构数量比例照图，主体完整。`;
 }
 
 function fixedWordsPrompt(plan) {
