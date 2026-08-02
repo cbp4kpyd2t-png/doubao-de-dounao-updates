@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.11",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.11/doubao-de-dounao-1.4.11-win-x64.zip",
-    "sha256":  "04ce2c02ac273735001db2eb15b1574b10f8b478e62eb25f2a050b93679d1f31",
-    "notes":  "Adds per-product tagged vocabulary files, linked scene/action/relation/camera combinations, product-specific fixed words, and mandatory clear front-facing large people while keeping prompts within 500 characters.",
-    "publishedAt":  "2026-08-02T10:41:44.2611829Z"
+    "version":  "1.4.12",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.12/doubao-de-dounao-1.4.12-win-x64.zip",
+    "sha256":  "8aaf47c59c8e7a83a349bb729363e2b9a9a000ee71558bcc2935d7fcc93165a8",
+    "notes":  "Forces all five images to use different people, ethnicities, faces, and clothing; keeps clear front-facing large people and all product-specific prompts within 500 Chinese characters.",
+    "publishedAt":  "2026-08-02T12:28:03.3630737Z"
 }
