@@ -92,6 +92,39 @@ test('approved AI vocabulary changes scene, action and camera dimensions without
   assert.ok(new Set(plan.tasks.slice(0, 5).map((task) => task.action)).size >= 2);
 });
 
+test('极简词库按同标签组合并把正脸大人物设为硬约束', async () => {
+  const item = await fixture('L999测试收纳架主图', '黑色双层收纳架。');
+  const first = await prepareProductCreativeFiles(item.product, { cycle: 1 });
+  await fsp.writeFile(path.join(first.configDir, '极简词库.txt'), `L999 测试收纳架
+锁=黑色｜双层
+人物锁=清晰正脸｜人物大比例
+固定词=双层结构｜正面抽拉
+动机=快速收纳
+受众=家庭用户
+场景12=[用]厨房台面｜[装]橱柜内部
+动作12=[用]拿取餐盘｜[装]推入层架
+关系=[用]人物在商品侧面｜[装]双手靠近层架
+机位=[用]正脸中近景｜[装]侧前方近景
+销售=拿取方便｜结构清楚
+禁配=虚构第三层｜人物背脸
+`, 'utf8');
+  const { facts, plan, taggedVocabulary } = await prepareProductCreativeFiles(item.product, { cycle: 1 });
+  assert.ok(taggedVocabulary);
+  assert.equal(plan.taggedVocabularyUsed, true);
+  assert.equal(plan.aiVocabularyUsed, false);
+  assert.ok(plan.tasks.every((task) => task.person.includes('清晰正脸') && task.person.includes('较大比例')));
+  for (const task of plan.tasks) {
+    if (task.linkageTag === '用') assert.deepEqual([task.scene, task.action], ['厨房台面', '拿取餐盘']);
+    if (task.linkageTag === '装') assert.deepEqual([task.scene, task.action], ['橱柜内部', '推入层架']);
+  }
+  const prompt = buildRoundPrompt(facts, plan, 1);
+  assert.match(prompt, /词库硬锁：黑色、双层、清晰正脸、人物大比例/);
+  assert.match(prompt, /禁错：虚构第三层、人物背脸/);
+  assert.match(prompt, /人物清晰正脸、画面占比大/);
+  assert.match(prompt, /必带：双层结构、正面抽拉/);
+  assert.ok(prompt.length <= FINAL_PROMPT_MAX_LENGTH);
+});
+
 test('round prompt uses cleaned facts, five distinct tasks, and mandatory five-image wording', async () => {
   const item = await fixture('橱柜厨房岛台置物架主图', '黑色双层置物架，用于厨房岛台收纳。');
   const { facts, plan } = await prepareProductCreativeFiles(item.product, { cycle: 1 });

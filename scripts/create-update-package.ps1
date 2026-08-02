@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Saves AI creative analysis after every stage, resumes failed analysis from its checkpoint, and preserves specific product scenes and actions under 500 characters.'
+  notes = 'Adds per-product tagged vocabulary files, linked scene/action/relation/camera combinations, product-specific fixed words, and mandatory clear front-facing large people while keeping prompts within 500 characters.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

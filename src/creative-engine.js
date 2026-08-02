@@ -2,12 +2,13 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { loadTaggedVocabulary, ensureTaggedVocabularyTemplate, toCreativeBank } = require('./tagged-vocabulary');
 
-const CREATIVE_ENGINE_VERSION = 3;
+const CREATIVE_ENGINE_VERSION = 4;
 const CONFIG_DIR_NAME = '豆脑配置';
 const CUSTOM_REQUIREMENTS_FILE = '创意要求.txt';
 
-const FIXED_FIVE_IMAGE_PROMPT = '输出：依次生成5张独立1:1主图，每次1张并自动继续；禁止拼图、网格和多视角合集。商品完整醒目，结构比例严格按参考图；五张人物正脸且不同，不遮挡商品；禁文字、Logo、水印和虚构配件。';
+const FIXED_FIVE_IMAGE_PROMPT = '输出：依次生成5张独立1:1主图，每次1张并自动继续；禁止拼图、网格和多视角合集。商品完整醒目，结构比例严格按参考图；五张人物清晰正脸、画面占比大且不同，不遮挡商品；禁文字、Logo、水印和虚构配件。';
 
 const PERSON_TYPES = ['年轻女性', '年轻男性', '中年女性', '中年男性', '优雅女性', '成熟男性', '时尚女性', '休闲男性', '家庭主理人', '专业使用者'];
 const APPAREL = ['浅色高级家居服', '深色简约休闲装', '米白针织服装', '低饱和亚麻服装', '现代都市休闲装', '优雅轻奢服装', '自然户外服装', '整洁工作服', '柔和暖色服装', '高级黑白配服装'];
@@ -207,10 +208,21 @@ function buildAngle(index, cycle = 1, creativeBank = null) {
 
 function personModeFor(index) {
   const slot = index % 5;
-  if (slot < 2) return '人物正在真实使用商品，动作自然且不遮挡商品';
-  if (slot === 2) return '人物位于商品侧面或后方，商品在前景完整突出';
-  if (slot === 3) return '人物站在商品旁展示使用结果，不能遮挡商品';
-  return '人物位于商品后侧营造真实生活氛围，商品仍是主角';
+  if (slot < 2) return '清晰正脸人物近景真实使用商品，人物占画面较大比例且不遮挡商品';
+  if (slot === 2) return '清晰正脸人物位于商品侧面，人物占画面较大比例，商品在前景完整突出';
+  if (slot === 3) return '清晰正脸人物近距离展示使用结果，人物占画面较大比例且不遮挡商品';
+  return '清晰正脸人物位于商品后侧近景，人物占画面较大比例，商品仍是主角';
+}
+
+function taggedValues(items, tag) {
+  const exact = (items || []).filter((item) => item.tag === tag);
+  const common = (items || []).filter((item) => item.tag === '通');
+  return exact.length ? exact : (common.length ? common : (items || []));
+}
+
+function chooseTagged(items, tag, index, fallback = '') {
+  const values = taggedValues(items, tag);
+  return values.length ? values[index % values.length].text : fallback;
 }
 
 function buildCreativePlan(facts, options = {}) {
@@ -231,22 +243,32 @@ function buildCreativePlan(facts, options = {}) {
   const seasons = bankValues(creativeBank, 'seasons', []);
   const weather = bankValues(creativeBank, 'weather', []);
   const animals = bankValues(creativeBank, 'animals', []);
+  const taggedVocabulary = creativeBank?.taggedVocabulary || null;
   const tasks = Array.from({ length: 50 }, (_, index) => {
     const round = Math.floor(index / 5) + 1;
     const slot = index % 5;
     const offset = index + cycle * 3;
     const luxuryBase = choose(architecture, offset, '高级商业生活空间');
+    const linkedTag = taggedVocabulary ? choose(taggedVocabulary.linkedTags, offset, '通') : '';
+    const linkedIndex = Math.floor(offset / Math.max(1, taggedVocabulary?.linkedTags?.length || 1)) + round + slot;
+    const linkedScene = taggedVocabulary ? chooseTagged(taggedVocabulary.scenes, linkedTag, linkedIndex, luxuryBase) : choose(scenes, index + cycle - 1, luxuryBase);
+    const linkedAction = taggedVocabulary ? chooseTagged(taggedVocabulary.actions, linkedTag, linkedIndex * 3 + slot, '自然使用商品') : choose(actions, index + cycle - 1, '自然使用商品');
+    const linkedRelation = taggedVocabulary ? chooseTagged(taggedVocabulary.relations, linkedTag, linkedIndex * 5 + slot, '') : choose(spatialRelations, offset * 11 + slot, '');
+    const linkedCamera = taggedVocabulary ? chooseTagged(taggedVocabulary.cameras, linkedTag, linkedIndex * 7 + slot, '') : '';
+    const angle = buildAngle(index, cycle, creativeBank);
+    if (linkedCamera) angle.cameraDirection = linkedCamera;
     return {
       imageNumber: index + 1,
       round,
       slot: slot + 1,
       salesRole: choose(salesRoles, offset * 7 + slot, SALES_ROLES[slot % SALES_ROLES.length]),
-      angle: buildAngle(index, cycle, creativeBank),
+      linkageTag: linkedTag,
+      angle,
       personMode: personModeFor(index),
-      person: `${choose(people, index + cycle - 1, '虚构人物')}，正脸可见且与本轮其他图片不同`,
-      action: choose(actions, index + cycle - 1, '自然使用商品'),
-      spatialRelation: choose(spatialRelations, offset * 11 + slot, ''),
-      scene: choose(scenes, index + cycle - 1, luxuryBase),
+      person: `${choose(taggedVocabulary?.audiences || people, index + cycle - 1, '真实使用者')}，清晰正脸，人物占画面较大比例且与本轮其他图片不同`,
+      action: linkedAction,
+      spatialRelation: linkedRelation,
+      scene: linkedScene,
       props: choose(props, offset + round, '丰富高级生活道具'),
       lighting: choose(lighting, offset * 4 + slot, '通透商业光线'),
       colorPalette: choose(colors, offset * 13 + slot, ''),
@@ -259,7 +281,7 @@ function buildCreativePlan(facts, options = {}) {
   });
   const signatures = new Set(tasks.map((task) => JSON.stringify(task.angle)));
   if (signatures.size !== 50) throw new Error('创意角度规划未能生成50个唯一组合');
-  return { schemaVersion: 2, engineVersion: CREATIVE_ENGINE_VERSION, generatedAt: new Date().toISOString(), sourceFingerprint: facts.sourceFingerprint, cycle, productId: facts.productId, productName: facts.productName, taskCount: tasks.length, peopleTaskCount: tasks.filter((task) => task.person !== '无人物').length, uniqueAngleCount: signatures.size, aiVocabularyUsed: !!creativeBank, tasks };
+  return { schemaVersion: 3, engineVersion: CREATIVE_ENGINE_VERSION, generatedAt: new Date().toISOString(), sourceFingerprint: facts.sourceFingerprint, vocabularyFingerprint: taggedVocabulary?.sourceFingerprint || null, cycle, productId: facts.productId, productName: facts.productName, taskCount: tasks.length, peopleTaskCount: tasks.filter((task) => task.person !== '无人物').length, uniqueAngleCount: signatures.size, aiVocabularyUsed: !!creativeBank && !taggedVocabulary, taggedVocabularyUsed: !!taggedVocabulary, vocabularyRules: taggedVocabulary ? { locks: taggedVocabulary.locks, personLocks: taggedVocabulary.personLocks, fixedWords: taggedVocabulary.fixedWords, blocks: taggedVocabulary.blocks } : null, tasks };
 }
 
 function factsPrompt(facts) {
@@ -283,7 +305,28 @@ function taskPrompt(task) {
   const a = task.angle;
   const sceneFallbacks = ['住宅主场景', '窗边生活区', '专业使用区', '室内展示区', '户外生活区'];
   const actionFallbacks = ['正面展示商品', '侧面观察商品', '整理使用空间', '展示核心用途', '完成使用后欣赏'];
-  return `图片${task.slot}：${completePromptPart(a.productOrientation, 8, '自然转向')}/${completePromptPart(a.cameraDirection, 12, '斜向机位')}；${completePromptPart(task.scene, 16, sceneFallbacks[task.slot - 1])}；${completePromptPart(task.action, 16, actionFallbacks[task.slot - 1])}`;
+  const relation = completePromptPart(task.spatialRelation, 10, '');
+  return `图片${task.slot}：${completePromptPart(a.productOrientation, 8, '自然转向')}/${completePromptPart(a.cameraDirection, 10, '斜向机位')}；${completePromptPart(task.scene, 12, sceneFallbacks[task.slot - 1])}；${completePromptPart(task.action, 12, actionFallbacks[task.slot - 1])}${relation ? `；${relation}` : ''}`;
+}
+
+function vocabularyRulesPrompt(plan) {
+  const rules = plan.vocabularyRules;
+  if (!rules) return '';
+  const locks = unique([...(rules.locks || []), ...(rules.personLocks || [])]).join('、');
+  const blocks = unique(rules.blocks || []).join('、');
+  return `词库硬锁：${locks}；禁错：${blocks}。`;
+}
+
+function taggedFactsPrompt(facts, plan) {
+  if (!plan.vocabularyRules) return factsPrompt(facts);
+  const name = completePromptPart(facts?.productName, 24, '商品');
+  const quantity = facts?.quantity ? `；数量${facts.quantity}` : '';
+  return `商品：${name}；参考图为唯一身份锚点${quantity}；结构数量比例按参考图，主体完整醒目。`;
+}
+
+function fixedWordsPrompt(plan) {
+  const productWords = plan.vocabularyRules?.fixedWords || [];
+  return productWords.length ? `必带：${productWords.join('、')}。` : '';
 }
 
 function angleLockPrompt(referenceSelection) {
@@ -297,7 +340,9 @@ function buildRoundPrompt(facts, plan, round, globalRequirements = '', reference
   const selected = plan.tasks.filter((task) => task.round === round);
   if (selected.length !== 5) throw new Error(`第${round}轮创意任务不是5张`);
   const prompt = [
-    factsPrompt(facts),
+    taggedFactsPrompt(facts, plan),
+    vocabularyRulesPrompt(plan),
+    fixedWordsPrompt(plan),
     angleLockPrompt(referenceSelection),
     globalRequirements ? `补充：${completePromptPart(globalRequirements, 36, '保持商品真实并突出主体')}` : '',
     `第${round}轮：`,
@@ -341,6 +386,7 @@ async function archiveManagedFiles(configDir, previousFingerprint) {
 async function prepareProductCreativeFiles(product, options = {}) {
   const fingerprint = await sourceFingerprint(product);
   const configDir = path.join(product.dir, CONFIG_DIR_NAME);
+  await ensureTaggedVocabularyTemplate(configDir);
   const fingerprintFile = path.join(configDir, '来源指纹.json');
   const previous = await readJson(fingerprintFile);
   let facts = await readJson(path.join(configDir, '商品事实.json'));
@@ -353,9 +399,11 @@ async function prepareProductCreativeFiles(product, options = {}) {
     await atomicWrite(path.join(configDir, '提取报告.txt'), reportText(facts));
     await atomicWrite(fingerprintFile, `${JSON.stringify({ schemaVersion: 1, engineVersion: CREATIVE_ENGINE_VERSION, sourceFingerprint: fingerprint, sourceFiles: facts.sourceFiles, updatedAt: new Date().toISOString() }, null, 2)}\n`);
   }
-  const plan = buildCreativePlan(facts, { ...options, creativeBank: options.creativeBank || null });
+  const taggedVocabulary = options.taggedVocabulary === undefined ? await loadTaggedVocabulary(configDir) : options.taggedVocabulary;
+  const creativeBank = taggedVocabulary ? toCreativeBank(taggedVocabulary) : (options.creativeBank || null);
+  const plan = buildCreativePlan(facts, { ...options, creativeBank });
   await atomicWrite(path.join(configDir, '创意计划.json'), `${JSON.stringify(plan, null, 2)}\n`);
-  return { configDir, fingerprint, sourceChanged, facts, plan };
+  return { configDir, fingerprint, sourceChanged, facts, plan, taggedVocabulary };
 }
 
 module.exports = { CREATIVE_ENGINE_VERSION, CONFIG_DIR_NAME, CUSTOM_REQUIREMENTS_FILE, FIXED_FIVE_IMAGE_PROMPT, COMPACT_FACTS_MAX_LENGTH, FINAL_PROMPT_MAX_LENGTH, normalizeProductName, quantityCandidates, extractProductFacts, compactFactsPrompt, buildCreativePlan, buildRoundPrompt, prepareProductCreativeFiles, sourceFingerprint };

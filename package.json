@@ -1,6 +1,6 @@
 {
   "name": "ecommerce-main-image-generator",
-  "version": "1.4.9",
+  "version": "1.4.10",
   "description": "豆包的豆脑：通过 Microsoft Edge 和 ChatGPT 批量生成电商主图",
   "main": "src/main.js",
   "author": "Codex",
@@ -12,6 +12,9 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/*.test.js\"",
+    "vocabulary:sync": "node scripts/sync-tagged-vocabularies.js",
+    "vocabulary:audit": "node scripts/audit-tagged-vocabularies.js",
+    "vocabulary:fixed": "node scripts/set-product-fixed-words.js",
     "test:live-smoke": "electron scripts/live-smoke-test.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis",

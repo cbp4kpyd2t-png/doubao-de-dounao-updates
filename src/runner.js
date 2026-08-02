@@ -172,7 +172,9 @@ class TaskRunner extends EventEmitter {
     }
     let bundle = await prepareProductCreativeFiles(product, { cycle });
     let aiVocabularyUsed = false;
-    if (creativePolicy.aiEnabled !== false) {
+    const taggedVocabularyUsed = !!bundle.taggedVocabulary;
+    if (taggedVocabularyUsed) this.log(`已加载极简联动词库：${product.name}；以后只需编辑“豆脑配置/极简词库.txt”即可增加词条`);
+    if (!taggedVocabularyUsed && creativePolicy.aiEnabled !== false) {
       try {
         const ai = await ensureAiCreativeBank({
           browser: this.browser,
@@ -204,8 +206,9 @@ class TaskRunner extends EventEmitter {
       }
     }
     const prompt = buildRoundPrompt(bundle.facts, bundle.plan, round, creativePolicy.globalRequirements || '', product.imageSelection);
-    this.log(`差异化创意已就绪：${product.name} 第${round}轮，商品事实${bundle.sourceChanged ? '已重新提取' : '沿用已验证版本'}，${aiVocabularyUsed ? 'AI审稿词库' : '本地安全词库'}，创意引擎v${CREATIVE_ENGINE_VERSION}`);
-    return { sourcePrompt: prompt, prompt, creativeFingerprint: bundle.fingerprint, creativeMode: true };
+    const vocabularyLabel = taggedVocabularyUsed ? '极简联动词库' : (aiVocabularyUsed ? 'AI审稿词库' : '本地安全词库');
+    this.log(`差异化创意已就绪：${product.name} 第${round}轮，商品事实${bundle.sourceChanged ? '已重新提取' : '沿用已验证版本'}，${vocabularyLabel}，创意引擎v${CREATIVE_ENGINE_VERSION}`);
+    return { sourcePrompt: prompt, prompt, creativeFingerprint: bundle.plan.vocabularyFingerprint || bundle.fingerprint, creativeMode: true };
   }
   async checkIgnoredChats(context) {
     const ignoredChats = this.state.ignoredChats ||= []; let collectedImages = 0;
