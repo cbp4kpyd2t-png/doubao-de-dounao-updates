@@ -641,7 +641,7 @@ if($Action -eq 'read-marked-response'){
 if($Action -eq 'upload'){
   $quoted=($payload.files|ForEach-Object{'"'+$_+'"'}) -join ' '
   $existingFileName=FindVisibleByAutomationId ([Windows.Automation.AutomationElement]::RootElement) '1148'
-  if($existingFileName){SubmitFileNames $existingFileName $quoted; $attached=WaitForAttachments $payload.files.Count; if($attached -lt $payload.files.Count){throw "Reference upload incomplete: expected $($payload.files.Count), found $attached"}; Result @{ok=$true;reusedPicker=$true;attachmentCount=$attached}}
+  if($existingFileName){SubmitFileNames $existingFileName $quoted; $attached=WaitForAttachments $payload.files.Count; Result @{ok=($attached -ge $payload.files.Count);incomplete=($attached -lt $payload.files.Count);reusedPicker=$true;attachmentCount=$attached}}
   [Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 400
   $add=FindByName $root 'Attach files|Add photos|Upload' 'Button'
   if(-not $add){$add=FindByAutomationId $root 'composer-plus-btn'}
@@ -655,8 +655,7 @@ if($Action -eq 'upload'){
   if($fileName){SubmitFileNames $fileName $quoted}
   elseif(-not (SelectFilesInOpenDialog $payload.files)){SetClipboardText $quoted; [Windows.Forms.SendKeys]::SendWait('%n'); Start-Sleep -Milliseconds 250; [Windows.Forms.SendKeys]::SendWait('^a'); [Windows.Forms.SendKeys]::SendWait('^v'); [Windows.Forms.SendKeys]::SendWait('{ENTER}')}
   $attached=WaitForAttachments $payload.files.Count
-  if($attached -lt $payload.files.Count){throw "Reference upload incomplete: expected $($payload.files.Count), found $attached"}
-  Result @{ok=$true;attachmentCount=$attached}
+  Result @{ok=($attached -ge $payload.files.Count);incomplete=($attached -lt $payload.files.Count);attachmentCount=$attached}
 }
 if($Action -eq 'inspect-attach-menu'){
   [Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 150

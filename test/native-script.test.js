@@ -169,17 +169,27 @@ test('保存前持续观察缩略图并识别只有一张图片', () => {
   assert.match(action, /five=\(\$best -ge 4\)/);
 });
 
-test('参考图一次提交全部路径并核对附件数量', () => {
+test('参考图一次提交全部路径并返回实际附件数量', () => {
   const upload = script.slice(script.indexOf("if($Action -eq 'upload')"), script.indexOf("if($Action -eq 'inspect-attach-menu')"));
   assert.match(upload, /SubmitFileNames \$fileName \$quoted/);
   assert.match(upload, /WaitForAttachments \$payload\.files\.Count/);
-  assert.match(upload, /Reference upload incomplete/);
+  assert.match(upload, /incomplete=\(\$attached -lt \$payload\.files\.Count\)/);
+  assert.doesNotMatch(upload, /Reference upload incomplete/);
   assert.doesNotMatch(upload, /if\(SelectFilesInOpenDialog \$payload\.files\)\{Result/);
 });
 
 test('附件不完整时支持删除全部附件后重传', () => {
   const clear = script.slice(script.indexOf("if($Action -eq 'clear-attachments')"), script.indexOf("if($Action -eq 'send')"));
   assert.match(clear, /CountComposerAttachments/); assert.match(clear, /ClickElement \$remove/); assert.match(clear, /remaining=\$remaining/);
+});
+
+test('至少识别一张参考图时继续发送，零附件才进入重试', () => {
+  const source = fs.readFileSync(require.resolve('../src/automation'), 'utf8');
+  const upload = source.slice(source.indexOf('async uploadReferences'), source.indexOf('async sendPrompt'));
+  assert.match(upload, /attachmentCount === 0/);
+  assert.match(upload, /this\.expectedAttachments = Math\.min\(files\.length, attachmentCount\)/);
+  assert.match(upload, /附件不足继续/);
+  assert.match(upload, /return \{ expected: files\.length, attached: attachmentCount, incomplete: attachmentCount < files\.length \}/);
 });
 
 test('发送前等待全部附件稳定且上传状态结束', () => {

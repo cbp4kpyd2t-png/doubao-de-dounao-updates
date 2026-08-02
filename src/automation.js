@@ -118,8 +118,14 @@ class ChatGPTAutomation {
         try {
           const result = await runNative('upload', { files }, 90000);
           checkAbort();
-          if ((result.attachmentCount || 0) < files.length) throw new Error(`应上传 ${files.length} 张，实际识别 ${result.attachmentCount || 0} 张`);
-          this.expectedAttachments = files.length; await sleep(250); return;
+          const attachmentCount = Math.max(0, Math.trunc(Number(result.attachmentCount) || 0));
+          if (attachmentCount === 0) throw new Error(`应上传 ${files.length} 张，实际识别 0 张`);
+          this.expectedAttachments = Math.min(files.length, attachmentCount);
+          if (attachmentCount < files.length) {
+            this.log(`参考图未全部识别：应有 ${files.length} 张，实际 ${attachmentCount} 张；按照“附件不足继续”规则保留现有附件并发送文案。`);
+          }
+          await sleep(250);
+          return { expected: files.length, attached: attachmentCount, incomplete: attachmentCount < files.length };
         } catch (error) {
           lastError = error; this.log(`参考图上传未完整（第 ${attempt}/3 次）：${error.message}`);
           const cleared = await runNative('clear-attachments', {}, 45000).catch(() => ({ ok: false }));
