@@ -100,6 +100,7 @@ class ChatGPTAutomation {
   async newChat() {
     await this.assertSafePage(); const fresh = await runNative('new-chat', {}, 60000); await sleep(250); await this.assertSafePage();
     if (!fresh.ok || fresh.attachmentCount !== 0) throw new Error('新对话验证失败：页面仍包含旧附件，已停止本轮上传');
+    this.currentChatUrl = null;
   }
   async uploadReferences(files, shouldAbort = () => false, options = {}) {
     const maxRefreshCycles = Math.max(0, Math.min(5, Number(options.maxRefreshCycles ?? 2)));
@@ -149,7 +150,7 @@ class ChatGPTAutomation {
       if (!verified.ok) throw new Error(`发送前附件校验失败：应有 ${this.expectedAttachments} 张，实际 ${verified.attachmentCount || 0} 张`);
     }
     const timeoutSeconds = Math.max(10, Math.min(600, Math.trunc(Number(generationTimeoutSeconds) || 60)));
-    const before = await runNative('inspect'); this.downloadBaseline = before.downloadCount || 0; this.generatedBaseline = before.generatedCount || 0; clipboard.writeText(text); const sent = await runNative('send'); if ((sent.attempts || 1) > 1) this.log(`发送按钮首次点击未生效，第${sent.attempts}次重试后已确认提交`); this.expectedAttachments = 0; this.generationDeadline = Date.now() + timeoutSeconds * 1000; this.generationTimeoutSeconds = timeoutSeconds;
+    const before = await runNative('inspect'); this.downloadBaseline = before.downloadCount || 0; this.generatedBaseline = before.generatedCount || 0; clipboard.writeText(text); const sent = await runNative('send'); if ((sent.attempts || 1) > 1) this.log(`发送按钮首次点击未生效，第${sent.attempts}次重试后已确认提交`); this.currentChatUrl = sent.chatUrl || null; this.expectedAttachments = 0; this.generationDeadline = Date.now() + timeoutSeconds * 1000; this.generationTimeoutSeconds = timeoutSeconds;
   }
   async requestStructuredText(text, options = {}) {
     const images = Array.isArray(options.images) ? options.images : [];
@@ -161,7 +162,7 @@ class ChatGPTAutomation {
       if (!verified.ok) throw new Error(`AI分析发送前附件校验失败：应有${this.expectedAttachments}张，实际${verified.attachmentCount || 0}张`);
     }
     clipboard.writeText(String(text || ''));
-    const sent = await runNative('send');
+    const sent = await runNative('send'); this.currentChatUrl = sent.chatUrl || null;
     this.expectedAttachments = 0;
     if ((sent.attempts || 1) > 1) this.log(`AI文字分析的发送按钮第${sent.attempts}次重试后提交成功`);
     const result = await runNative('read-marked-response', {
@@ -215,7 +216,7 @@ class ChatGPTAutomation {
     while (usedNumbers.has(availableStartNumber)) availableStartNumber += 1;
     const filesBeforeSave = new Set((await fsp.readdir(targetDir, { withFileTypes: true })).filter((item) => item.isFile()).map((item) => item.name));
     let result;
-    try { result = await runNative('save-viewer-images', { targetDir, fileStem, startNumber: availableStartNumber, needed, processedIndexes }, Math.max(120000, (needed + 1) * 45000)); }
+    try { result = await runNative('save-viewer-images', { targetDir, fileStem, startNumber: availableStartNumber, needed, processedIndexes }, Math.max(90000, (needed + 1) * 20000)); }
     catch (error) {
       let recoveryError = null;
       try { await runNative('recover-save-ui', { chatUrl: chatUrlBeforeSave }, 90000); await this.assertSafePage(); }
@@ -227,8 +228,10 @@ class ChatGPTAutomation {
       throw new Error(`__SAVE_FAILED_RECOVERED__:${error.message}`);
     }
     if (Number.isInteger(result.selectedThumbnailIndex) && result.selectedThumbnailIndex >= 0) this.log(`已跳过与当前大图对应的第${result.selectedThumbnailIndex + 1}个缩略图${result.selectedThumbnailAssumed ? '（按当前查看器布局识别）' : ''}`);
-    const saved = [];
+    if (result.failed?.length) this.log(`本次有${result.failed.length}张未能切换或保存，已保留其他成功图片并交给快速复扫：${result.failed.map((item) => item.reason).join('；')}`);
+    const saved = []; const observedIndexes = [];
     for (const item of result.saved || []) {
+      if (Number.isInteger(item.index) && !observedIndexes.includes(item.index)) observedIndexes.push(item.index);
       try {
         const info = await validateImage(item.file, knownHashes);
         const expectedExt = extensionFor(info.format);
@@ -243,6 +246,7 @@ class ChatGPTAutomation {
         else { await fsp.unlink(item.file).catch(() => {}); throw new Error(`已保存图片校验失败，损坏文件已删除并禁止误发补图请求：${error.message}`); }
       }
     }
+    saved.processedIndexes = observedIndexes;
     return saved;
   }
 }

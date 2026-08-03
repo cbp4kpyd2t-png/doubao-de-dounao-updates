@@ -10,7 +10,7 @@ test('原生脚本使用UTF-8输出中文文件路径', () => {
   assert.match(script, /\$OutputEncoding=\$utf8Output/);
 });
 
-test('另存为流程使用窗口控件而非Alt+N快捷键', () => {
+test('另存为流程使用窗口控件并采用快速有限确认', () => {
   assert.match(script, /function SubmitSavePath/);
   const submitSave = script.slice(script.indexOf('function SubmitSavePath'), script.indexOf('$loginWord='));
   assert.match(script, /Save As file name field was not found/);
@@ -20,7 +20,8 @@ test('另存为流程使用窗口控件而非Alt+N快捷键', () => {
   assert.match(script, /function WriteAndVerifySavePath/);
   assert.match(submitSave, /Save As file name field did not accept the full target path/);
   assert.match(submitSave, /\^Open\$\|\^\$openWord\$/);
-  assert.match(submitSave, /Save As dialog remained open for 15 seconds/);
+  assert.match(submitSave, /\$attempt=1;\$attempt -le 2/);
+  assert.match(submitSave, /\$check=0;\$check -lt 12/);
   const saveAction = script.slice(script.indexOf("if($Action -eq 'save-viewer-images')"));
   assert.doesNotMatch(saveAction, /SendWait\('%n'\)/);
   assert.match(script, /foreach\(\$automationId in @\('1001','1148'\)\)/);
@@ -31,8 +32,7 @@ test('另存为流程使用窗口控件而非Alt+N快捷键', () => {
   assert.match(script, /FindNativeControl \$dialog '1' '\^Button\$'/);
   assert.match(submitSave, /InvokeElement \$save/);
   assert.match(submitSave, /SendWait\('\{ENTER\}'\)/);
-  assert.match(submitSave, /ClickElement \$save/);
-  assert.match(submitSave, /Save As dialog remained open for 15 seconds and no saved file appeared/);
+  assert.match(submitSave, /Save As dialog remained open and no saved file appeared/);
   assert.match(script, /function FindSavedTargetFile/);
   assert.match(script, /function FindVisibleSaveDialog/);
   assert.match(script, /function CloseVisibleSaveDialogs/);
@@ -56,7 +56,7 @@ test('查看器兼容五缩略图和当前大图加四缩略图两种布局', ()
   assert.match(script, /function FindGeneratedMainImage/);
   assert.match(script, /function WaitForGeneratedMainImage/);
   assert.match(script, /function FindViewerThumbnails/);
-  assert.match(saveAction, /WaitForGeneratedMainImage 45/);
+  assert.match(saveAction, /WaitForGeneratedMainImage 15/);
   assert.match(saveAction, /FindViewerThumbnails \$initialMain/);
   assert.match(script, /generated image\|\^\$generatedImagePrefix/);
   assert.match(script, /\$mainRect\.Y\+\$mainRect\.Height\+800/);
@@ -64,22 +64,21 @@ test('查看器兼容五缩略图和当前大图加四缩略图两种布局', ()
   assert.match(script, /SelectionItemPattern/);
   assert.match(script, /HasKeyboardFocus/);
   assert.match(script, /if\(\$thumbs\.Count -gt 0\)\{return @\{index=0;assumed=\$true\}\}/);
-  assert.match(saveAction, /\$thumbnailSequence=@\(\)/);
-  assert.match(saveAction, /if\(\$initialThumbs\.Count -ge 5\)/);
-  assert.match(saveAction, /else\{\$thumbnailSequence\+=-1/);
+  assert.match(saveAction, /\$thumbnailSequence=@\(-1\)/);
+  assert.match(saveAction, /if\(\$i -ne \$selectedThumbIndex\)\{\$thumbnailSequence\+=\$i\}/);
   assert.match(saveAction, /\$candidateTotal=\[Math\]::Min\(5,\$thumbnailSequence\.Count\)/);
   assert.match(saveAction, /\$thumbIndex=\[int\]\$thumbnailSequence\[\$slot\]/);
   assert.match(script, /function SelectViewerThumbnail/);
   assert.match(script, /ScrollElementIntoView \$thumb\.element/);
-  assert.match(saveAction, /Main image did not change after selecting thumbnail/);
+  assert.match(saveAction, /\$failed\+=@\{index=\$slot;reason="Main image did not change after selecting thumbnail/);
   assert.match(script, /function GetImageRegionFingerprint/);
   assert.match(script, /CopyFromScreen/);
   assert.match(script, /function GetImageFingerprintDistance/);
   assert.match(script, /\$r\.Width\*0\.60/);
   assert.match(script, /\$distance -ge 4\.0/);
-  assert.match(saveAction, /\$menuAttempt=0;\$menuAttempt -lt 3/);
+  assert.match(saveAction, /\$menuAttempt=0;\$menuAttempt -lt 2/);
   assert.match(saveAction, /FindExactNameNearPoint/);
-  assert.match(saveAction, /after 3 attempts/);
+  assert.match(saveAction, /after 2 attempts/);
   assert.doesNotMatch(saveAction, /if\(-not \$savedFile\).*SendWait\('\{ESC\}'\)/);
   assert.match(saveAction, /WaitForViewerAfterSave 0/);
   assert.match(saveAction, /Image viewer closed after saving thumbnail/);
@@ -97,7 +96,8 @@ test('查看器兼容五缩略图和当前大图加四缩略图两种布局', ()
   assert.match(saveAction, /CloseVisibleSaveDialogs\|Out-Null/);
   assert.match(saveAction, /\$lastSaveError=\$_\.Exception\.Message/);
   assert.match(saveAction, /CloseVisibleSaveDialogs/);
-  assert.match(saveAction, /Save image as failed for thumbnail \$slot after 3 attempts\. Last error/);
+  assert.match(saveAction, /Save image as failed for thumbnail \$slot after 2 attempts\. Last error/);
+  assert.match(saveAction, /Result @\{saved=\$saved;failed=\$failed/);
   assert.match(script, /index=\$slot;file=\$savedFile/);
   assert.match(saveAction, /while\(\$true\).*if\(-not \$existing\.Count\)\{break\};\$number\+\+/s);
   assert.doesNotMatch(saveAction, /if\(\$existing\.Count\)\{\$saved\+=/);
@@ -207,6 +207,10 @@ test('发送按钮点击后必须确认页面已提交并支持三次重试', ()
   assert.match(send, /InvokeElement \$submit/);
   assert.match(send, /SendWait\('\{ENTER\}'\)/);
   assert.match(send, /page did not accept the click after 3 attempts/);
+  assert.match(script, /function ReadCurrentChatUrlFromAddress/);
+  assert.doesNotMatch(script.slice(script.indexOf('function SubmissionStarted'), script.indexOf('function FindExactNameInProcess')), /not \$submit\.Current\.IsEnabled/);
+  assert.match(send, /no ChatGPT conversation URL was created/);
+  assert.match(send, /chatUrl=\$chatUrl/);
 });
 
 test('AI文字分析等待完整边界标记并避开用户提示词中的第一组标记', () => {

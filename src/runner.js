@@ -264,14 +264,14 @@ class TaskRunner extends EventEmitter {
   }
 
   async deferCurrentChat(context, reason, metadata = {}) {
-    const url = await this.browser.waitForStableCurrentChatUrl(30000).catch(() => null);
+    const url = this.browser.currentChatUrl || await this.browser.waitForStableCurrentChatUrl(8000).catch(() => null);
     if (!url) { this.log(`当前超时对话地址尚未形成，无法加入回查队列：${reason}`); return null; }
     const ignoredChats = this.state.ignoredChats ||= [];
     let entry = ignoredChats.find((item) => item.url === url);
     if (!entry) {
       entry = { id: crypto.randomUUID(), url, productId: context.productId, round: context.round, cycle: context.cycle, inputFingerprint: context.inputFingerprint, status: 'pending', processedIndexes: [], ignoredAt: new Date().toISOString(), reason, ...metadata };
       ignoredChats.push(entry);
-    } else Object.assign(entry, metadata, { reason, inputFingerprint: entry.inputFingerprint || context.inputFingerprint });
+    } else Object.assign(entry, metadata, { reason, inputFingerprint: entry.inputFingerprint || context.inputFingerprint, status: entry.status === 'collected' ? 'collected' : 'pending' });
     await this.checkpoint(); this.log(`已将超时对话加入稍后回查队列：${url}`); return entry;
   }
 
@@ -292,14 +292,14 @@ class TaskRunner extends EventEmitter {
       }
     }
     currentEntry.processedIndexes = [...new Set(currentEntry.processedIndexes || [])].sort((a, b) => a - b);
-    const maxPasses = Math.max(1, Math.min(5, Number(options.maxPasses) || 5));
+    const maxPasses = Math.max(1, Math.min(5, Number(options.maxPasses) || 2));
     const allAdded = []; let detectedTotal = Math.max(0, Number(options.initialTotal) || 0); let noProgressPasses = 0;
     this.log(`准备开启新对话前执行最终复扫；当前已处理缩略图${currentEntry.processedIndexes.length}/5`);
     for (let pass = 1; pass <= maxPasses && currentEntry.processedIndexes.length < 5; pass += 1) {
       await this.waitIfPaused();
       let viewerInfo;
       try {
-        viewerInfo = await this.browser.getViewerImageCount({ targetTotal: 5, maxWaitSeconds: pass === 1 ? 20 : 12 });
+        viewerInfo = await this.browser.getViewerImageCount({ targetTotal: 5, findWaitSeconds: pass === 1 ? 4 : 2, maxWaitSeconds: pass === 1 ? 6 : 4 });
       } catch (error) {
         currentEntry.lastError = `最终复扫第${pass}次检测失败：${error.message}`;
         this.log(currentEntry.lastError);
@@ -339,8 +339,8 @@ class TaskRunner extends EventEmitter {
       currentEntry.status = 'pending';
       currentEntry.nextCheckAt = new Date(Date.now() + 5 * 60000).toISOString();
       noProgressPasses = processedAfter > processedBefore ? 0 : noProgressPasses + 1;
-      if (noProgressPasses >= 3) {
-        this.log('切换前最终复扫连续3次没有新增已处理缩略图，保留当前对话断点并交给稍后回查');
+      if (noProgressPasses >= 1) {
+        this.log('切换前最终复扫没有新增已处理缩略图，立即保留当前对话断点并交给稍后回查');
         break;
       }
       if (pass < maxPasses) await sleep(1200);
@@ -389,6 +389,7 @@ class TaskRunner extends EventEmitter {
     if (needed <= 0) return [];
     const shortId = String(entry.id || crypto.randomUUID()).replace(/[^a-zA-Z0-9]/g, '').slice(0, 10);
     const downloaded = await this.browser.downloadNewImages(poolDir, `${safeName(context.productName)}_pool_${shortId}`, 1, needed, poolHashes, processed);
+    for (const thumbnailIndex of downloaded.processedIndexes || []) if (Number.isInteger(thumbnailIndex) && !processed.includes(thumbnailIndex)) processed.push(thumbnailIndex);
     const added = []; this.state.qualityStats ||= { checked: 0, approved: 0, warnings: 0, rejected: 0 };
     transitionWorkflow(this.state, '质量检测', { ...this.stepContext(`候选${downloaded.length}张`) }); await this.checkpoint();
     for (const image of downloaded) {
@@ -526,7 +527,7 @@ class TaskRunner extends EventEmitter {
     const previousThumbnailProgressVersion = prior.thumbnailProgressVersion || 1;
     const previousIgnoredCheckEveryChats = Number.isFinite(prior.ignoredCheckEveryChats) ? prior.ignoredCheckEveryChats : 10;
     const ignoredCheckEveryChats = !prior.ignoredCheckPolicyVersion && previousIgnoredCheckEveryChats === 5 ? 10 : previousIgnoredCheckEveryChats;
-    const state = { ...prior, version: 4, pendingPoolVersion: 1, thumbnailProgressVersion: 2, ignoredCheckPolicyVersion: 2, root, runId: prior.runId || `legacy-${Date.parse(prior.createdAt) || Date.now()}`, runOutputDir: prior.runOutputDir || null, runOutputDirs: prior.runOutputDirs || (prior.runOutputDir ? [prior.runOutputDir] : []), status: prior.status || 'stopped', currentCycle: prior.currentCycle || 1, totalCycles: prior.totalCycles || 1, waitEnabled: prior.waitEnabled !== false, waitMinSeconds: Number.isFinite(prior.waitMinSeconds) ? prior.waitMinSeconds : 20, waitMaxSeconds: Number.isFinite(prior.waitMaxSeconds) ? prior.waitMaxSeconds : 60, generationTimeoutSeconds: Number.isFinite(prior.generationTimeoutSeconds) ? prior.generationTimeoutSeconds : 60, ignoredCheckEveryChats, rateLimitLevel: Number.isFinite(prior.rateLimitLevel) ? prior.rateLimitLevel : 0, rateLimitUntil: prior.rateLimitUntil || null, rateLimitRecoveryPending: prior.rateLimitRecoveryPending === true, currentProduct: prior.currentProduct || 0, products: prior.products || {}, ignoredChats: prior.ignoredChats || [], newChatsSinceIgnoredCheck: prior.newChatsSinceIgnoredCheck || 0, adaptiveScheduling: prior.adaptiveScheduling !== false, scheduler: prior.scheduler || {}, workflow: prior.workflow || { version: 1, sequence: 0, history: [], current: null, lastCompleted: null, recoveryCount: 0 }, qualityPolicy: { enabled: prior.qualityPolicy?.enabled !== false, minDimension: prior.qualityPolicy?.minDimension || 512, squareTolerance: prior.qualityPolicy?.squareTolerance || 0.08, requireWhite: prior.qualityPolicy?.requireWhite === true, strictConsistency: prior.qualityPolicy?.strictConsistency === true }, qualityStats: prior.qualityStats || { checked: 0, approved: 0, warnings: 0, rejected: 0 } };
+    const state = { ...prior, version: 4, pendingPoolVersion: 1, thumbnailProgressVersion: 3, ignoredCheckPolicyVersion: 2, root, runId: prior.runId || `legacy-${Date.parse(prior.createdAt) || Date.now()}`, runOutputDir: prior.runOutputDir || null, runOutputDirs: prior.runOutputDirs || (prior.runOutputDir ? [prior.runOutputDir] : []), status: prior.status || 'stopped', currentCycle: prior.currentCycle || 1, totalCycles: prior.totalCycles || 1, waitEnabled: prior.waitEnabled !== false, waitMinSeconds: Number.isFinite(prior.waitMinSeconds) ? prior.waitMinSeconds : 20, waitMaxSeconds: Number.isFinite(prior.waitMaxSeconds) ? prior.waitMaxSeconds : 60, generationTimeoutSeconds: Number.isFinite(prior.generationTimeoutSeconds) ? prior.generationTimeoutSeconds : 60, ignoredCheckEveryChats, rateLimitLevel: Number.isFinite(prior.rateLimitLevel) ? prior.rateLimitLevel : 0, rateLimitUntil: prior.rateLimitUntil || null, rateLimitRecoveryPending: prior.rateLimitRecoveryPending === true, currentProduct: prior.currentProduct || 0, products: prior.products || {}, ignoredChats: prior.ignoredChats || [], newChatsSinceIgnoredCheck: prior.newChatsSinceIgnoredCheck || 0, adaptiveScheduling: prior.adaptiveScheduling !== false, scheduler: prior.scheduler || {}, workflow: prior.workflow || { version: 1, sequence: 0, history: [], current: null, lastCompleted: null, recoveryCount: 0 }, qualityPolicy: { enabled: prior.qualityPolicy?.enabled !== false, minDimension: prior.qualityPolicy?.minDimension || 512, squareTolerance: prior.qualityPolicy?.squareTolerance || 0.08, requireWhite: prior.qualityPolicy?.requireWhite === true, strictConsistency: prior.qualityPolicy?.strictConsistency === true }, qualityStats: prior.qualityStats || { checked: 0, approved: 0, warnings: 0, rejected: 0 } };
     state.version = 5;
     state.creativePolicy = {
       enabled: prior.creativePolicy?.enabled !== false,
@@ -537,8 +538,8 @@ class TaskRunner extends EventEmitter {
     };
     state.scheduler.enabled = state.adaptiveScheduling;
     if (state.workflow.current?.status === 'active') { state.workflow.current.status = 'interrupted'; state.workflow.current.finishedAt = new Date().toISOString(); state.workflow.history ||= []; state.workflow.history.push(state.workflow.current); state.workflow.current = null; }
-    for (const ps of Object.values(state.products)) { ps.hashes ||= []; ps.thumbnailProgress ||= {}; ps.pendingPool ||= []; ps.chatAttempts ||= 0; if (previousThumbnailProgressVersion < 2) ps.thumbnailProgress = {}; ps.completed ||= 0; ps.round = Math.min(10, Math.floor(ps.completed / 5)); }
-    for (const entry of state.ignoredChats) { entry.stagedFiles ||= []; entry.stagedIndexes ||= []; entry.processedIndexes ||= []; if (entry.status === 'failed') entry.status = 'pending'; }
+    for (const ps of Object.values(state.products)) { ps.hashes ||= []; ps.thumbnailProgress ||= {}; ps.pendingPool ||= []; ps.chatAttempts ||= 0; if (previousThumbnailProgressVersion < 3) ps.thumbnailProgress = {}; ps.completed ||= 0; ps.round = Math.min(10, Math.floor(ps.completed / 5)); }
+    for (const entry of state.ignoredChats) { entry.stagedFiles ||= []; entry.stagedIndexes ||= []; entry.processedIndexes ||= []; if (previousThumbnailProgressVersion < 3) entry.processedIndexes = []; if (entry.status === 'failed' || entry.status === 'collecting') { entry.status = 'pending'; entry.nextCheckAt ||= new Date().toISOString(); } }
     return state;
   }
 
@@ -675,7 +676,8 @@ class TaskRunner extends EventEmitter {
           this.log(`商品“${product.name}”查看器稳定检测结果：${viewerInfo.total || 0}/5张`);
           await this.waitIfPaused(); this.watchRecoveryCount = 0;
           this.emitStatus({ product: product.name, round: ps.round, completed: ps.completed, phase: '下载中' });
-          const currentUrl = await browser.waitForStableCurrentChatUrl(30000).catch(() => null);
+          const currentUrl = browser.currentChatUrl || await browser.waitForStableCurrentChatUrl(12000).catch(() => null);
+          if (!currentUrl) throw new Error('__CHAT_URL_NOT_READY__:提示词发送后没有形成可验证的ChatGPT对话地址');
           let currentEntry = (this.state.ignoredChats || []).find((item) => currentUrl && item.url === currentUrl);
           if (!currentEntry) {
             currentEntry = { id: crypto.randomUUID(), url: currentUrl, productId: product.id, round: nextRound, cycle: this.state.currentCycle, inputFingerprint, status: 'collecting', processedIndexes: [], ignoredAt: new Date().toISOString(), reason: '当前对话已完整生成' };
@@ -685,7 +687,11 @@ class TaskRunner extends EventEmitter {
           const rejectedBefore = this.state.qualityStats?.rejected || 0;
           this.nativeSaveInFlight = true;
           try {
-            added = await this.runStep('保存图片', () => this.stageChatImagesToPool(this.recoveryContext, currentEntry, Math.min(5, viewerInfo.total || 5)), { maxAttempts: 1 });
+            try {
+              added = await this.runStep('保存图片', () => this.stageChatImagesToPool(this.recoveryContext, currentEntry, Math.min(5, viewerInfo.total || 5)), { maxAttempts: 1 });
+            } catch (error) {
+              currentEntry.status = 'pending'; currentEntry.nextCheckAt = new Date(Date.now() + 5 * 60000).toISOString(); await this.checkpoint(); throw error;
+            }
             if ((currentEntry.processedIndexes || []).length >= 5) { currentEntry.status = 'collected'; currentEntry.collectedAt = new Date().toISOString(); }
             else currentEntry.status = 'pending';
             promoted = await this.promotePendingPool(this.recoveryContext);

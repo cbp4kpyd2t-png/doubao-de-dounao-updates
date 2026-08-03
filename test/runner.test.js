@@ -357,6 +357,20 @@ test('开启新对话前最终复扫会把首次仅保存一张后的其余四�
   assert.equal(scans, 4);
 });
 
+test('中断时遗留的收集中链接会迁移为可回查状态', () => {
+  const runner = new TaskRunner('user-data', 'downloads');
+  const migrated = runner.migrateState({ ignoredChats: [{ url: 'https://chatgpt.com/c/stuck', status: 'collecting' }], products: {}, scheduler: {} }, 'D:\\products');
+  assert.equal(migrated.ignoredChats[0].status, 'pending');
+  assert.ok(migrated.ignoredChats[0].nextCheckAt);
+});
+
+test('默认最终复扫只进行两次短检测且无进展立即退出', () => {
+  const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
+  assert.match(source, /Number\(options\.maxPasses\) \|\| 2/);
+  assert.match(source, /findWaitSeconds: pass === 1 \? 4 : 2/);
+  assert.match(source, /noProgressPasses >= 1/);
+});
+
 test('所有进入下一新对话的生成结果分支都会执行切换前最终复扫', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
   assert.match(source, /async finalRescanCurrentChatBeforeNextChat/);
@@ -387,9 +401,12 @@ test('保存候选图片时删除重复文件并压紧连续编号', () => {
 
 test('旧版缩略图断点升级后清空以避免错位重复保存', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
-  assert.match(source, /thumbnailProgressVersion: 2/);
-  assert.match(source, /previousThumbnailProgressVersion < 2/);
+  const automation = fs.readFileSync(require.resolve('../src/automation'), 'utf8');
+  assert.match(source, /thumbnailProgressVersion: 3/);
+  assert.match(source, /previousThumbnailProgressVersion < 3/);
   assert.match(source, /ps\.thumbnailProgress = \{\}/);
+  assert.match(source, /downloaded\.processedIndexes \|\| \[\]/);
+  assert.match(automation, /saved\.processedIndexes = observedIndexes/);
 });
 
 test('UI可设置整批循环次数并传递给新任务', () => {

@@ -99,12 +99,20 @@ function WaitForAttachments($expected){
   for($i=0;$i -lt 120;$i++){Start-Sleep -Milliseconds 500;$count=CountComposerAttachments;$busy=ComposerUploadBusy;if($count -eq $last -and -not $busy){$stable++}else{$last=$count;$stable=0};if($count -eq $expected -and $stable -ge 4){return $count}}
   return [Math]::Max(0,$last)
 }
+function ReadCurrentChatUrlFromAddress($pageRoot){
+  try{
+    $address=FindByAutomationId $pageRoot 'addressEditBox'
+    if(-not $address){return $null}
+    try{$value=$address.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value}catch{$value=$address.Current.Name}
+    if(([string]$value) -match '^https://chatgpt\.com/(?:[^?#]*/)?c/[^/?#]+'){return [string]$value}
+  }catch{}
+  return $null
+}
 function SubmissionStarted($previousAttachments){
   $pageRoot=Root
   if(FindByName $pageRoot "Stop generating|Stop streaming|^$stopWord" 'Button'){return $true}
   if($previousAttachments -gt 0 -and (CountComposerAttachments) -eq 0){return $true}
-  $submit=FindByAutomationId $pageRoot 'composer-submit-button'
-  if(-not $submit -or -not $submit.Current.IsEnabled){return $true}
+  if(ReadCurrentChatUrlFromAddress $pageRoot){return $true}
   return $false
 }
 function FindExactNameInProcess($root,$names,$processName){
@@ -243,7 +251,7 @@ function GetImageFingerprintDistance($left,$right){
 }
 function WaitForViewerAfterSave($minimumThumbs=0){
   FocusEdge|Out-Null
-  $deadline=[DateTime]::UtcNow.AddSeconds(8);$best=$null
+  $deadline=[DateTime]::UtcNow.AddSeconds(4);$best=$null
   while([DateTime]::UtcNow -lt $deadline){
     $main=FindGeneratedMainImage $false
     if(-not $main){$main=FindGeneratedMainImage $true}
@@ -321,14 +329,14 @@ function EnsureThumbnailPointIsClear($thumb){
   return (ThumbnailPointIsClear $thumb)
 }
 function SelectViewerThumbnail($thumbIndex,$previousFingerprint){
-  for($attempt=1;$attempt -le 3;$attempt++){
+  for($attempt=1;$attempt -le 2;$attempt++){
     $viewer=WaitForViewerAfterSave 1
     if(-not $viewer -or $thumbIndex -ge $viewer.thumbs.Count){continue}
     $thumb=$viewer.thumbs[$thumbIndex]
     if($thumb.offscreen){ScrollElementIntoView $thumb.element|Out-Null;$viewer=WaitForViewerAfterSave 1;if(-not $viewer -or $thumbIndex -ge $viewer.thumbs.Count){continue};$thumb=$viewer.thumbs[$thumbIndex]}
     if(-not (EnsureThumbnailPointIsClear $thumb.element)){continue}
     if($attempt -eq 2){InvokeElement $thumb.element|Out-Null}else{ClickElement $thumb.element|Out-Null}
-    $deadline=[DateTime]::UtcNow.AddSeconds(8)
+    $deadline=[DateTime]::UtcNow.AddSeconds(4)
     while([DateTime]::UtcNow -lt $deadline){
       Start-Sleep -Milliseconds 400
       $main=FindGeneratedMainImage $false
@@ -435,16 +443,15 @@ function SubmitSavePath($targetBase){
   if(-not $save){throw "Save As submit button was not found for target: $targetBase"}
   $submitButtonName=$save.Current.Name
   $dialogClosed=$false
-  for($attempt=1;$attempt -le 3 -and -not $dialogClosed;$attempt++){
+  for($attempt=1;$attempt -le 2 -and -not $dialogClosed;$attempt++){
     $actual=(ReadElementValue $fileName).Trim()
     if($actual -ne $targetBase){
       $pathWrite=WriteAndVerifySavePath $fileName $targetBase
       if(-not $pathWrite.ok){continue}
     }
     if($attempt -eq 1){InvokeElement $save|Out-Null}
-    elseif($attempt -eq 2){try{$fileName.SetFocus()}catch{};Start-Sleep -Milliseconds 150;[Windows.Forms.SendKeys]::SendWait('{ENTER}')}
-    else{ClickElement $save|Out-Null}
-    for($check=0;$check -lt 20;$check++){
+    else{try{$fileName.SetFocus()}catch{};Start-Sleep -Milliseconds 150;[Windows.Forms.SendKeys]::SendWait('{ENTER}')}
+    for($check=0;$check -lt 12;$check++){
       Start-Sleep -Milliseconds 250
       if(FindSavedTargetFile $targetBase){
         Start-Sleep -Milliseconds 500
@@ -456,7 +463,7 @@ function SubmitSavePath($targetBase){
     }
   }
   if(-not $dialogClosed -and (FindSavedTargetFile $targetBase)){$dialogClosed=$true}
-  if(-not $dialogClosed){throw "Save As dialog remained open for 15 seconds and no saved file appeared. Target: $targetBase; Field: $(ReadElementValue $fileName); Button: $submitButtonName"}
+  if(-not $dialogClosed){throw "Save As dialog remained open and no saved file appeared. Target: $targetBase; Field: $(ReadElementValue $fileName); Button: $submitButtonName"}
 }
 
 $loginWord=([char]0x767b)+([char]0x5f55)
@@ -603,7 +610,14 @@ if($Action -eq 'send'){
     for($check=0;$check -lt 8;$check++){Start-Sleep -Milliseconds 500;if(SubmissionStarted $beforeAttachments){$sent=$true;break}}
   }
   if(-not $sent){throw 'Submit button was located but the page did not accept the click after 3 attempts'}
-  Result @{ok=$true;attempts=$usedAttempt}
+  $chatUrl=$null
+  for($i=0;$i -lt 20;$i++){$chatUrl=ReadCurrentChatUrlFromAddress (Root);if($chatUrl){break};Start-Sleep -Milliseconds 500}
+  if(-not $chatUrl){
+    [Windows.Forms.SendKeys]::SendWait('^l');Start-Sleep -Milliseconds 200;[Windows.Forms.SendKeys]::SendWait('^c');Start-Sleep -Milliseconds 250;$candidate=GetClipboardText;[Windows.Forms.SendKeys]::SendWait('{ESC}')
+    if(([string]$candidate) -match '^https://chatgpt\.com/(?:[^?#]*/)?c/[^/?#]+'){$chatUrl=[string]$candidate}
+  }
+  if(-not $chatUrl){throw 'The prompt appeared to submit, but no ChatGPT conversation URL was created'}
+  Result @{ok=$true;attempts=$usedAttempt;chatUrl=$chatUrl}
 }
 if($Action -eq 'read-marked-response'){
   $begin=[string]$payload.beginMarker;$end=[string]$payload.endMarker
@@ -670,7 +684,7 @@ if($Action -eq 'inspect-page-tail'){
   $skip=[Math]::Max(0,$items.Count-80); Result @{items=@($items|Select-Object -Skip $skip)}
 }
 if($Action -eq 'viewer-image-count'){
-  $findWaitSeconds=if($payload.findWaitSeconds){[Math]::Max(1,[Math]::Min(45,[int]$payload.findWaitSeconds))}else{45};[Windows.Forms.SendKeys]::SendWait('{ESC}');$main=WaitForGeneratedMainImage $findWaitSeconds;if(-not $main){Result @{found=$false;single=$false;thumbnailCount=0}}
+  $findWaitSeconds=if($payload.findWaitSeconds){[Math]::Max(1,[Math]::Min(45,[int]$payload.findWaitSeconds))}else{8};[Windows.Forms.SendKeys]::SendWait('{ESC}');$main=WaitForGeneratedMainImage $findWaitSeconds;if(-not $main){Result @{found=$false;single=$false;thumbnailCount=0}}
   $maxWaitSeconds=if($payload.maxWaitSeconds){[Math]::Max(2,[Math]::Min(45,[int]$payload.maxWaitSeconds))}else{8};$targetTotal=if($payload.targetTotal){[Math]::Max(1,[int]$payload.targetTotal)}else{5};$deadline=[DateTime]::UtcNow.AddSeconds($maxWaitSeconds);$best=0;$last=-1;$stable=0
   while([DateTime]::UtcNow -lt $deadline){$main=FindGeneratedMainImage $false;if(-not $main){$main=FindGeneratedMainImage $true};if($main){$count=@(FindViewerThumbnails $main).Count;if($count -gt $best){$best=$count};$total=if($best -eq 0){1}elseif($best -ge 4){5}else{$best+1};if($total -eq $last){$stable++}else{$last=$total;$stable=1};if($total -ge $targetTotal -and $stable -ge 6){break}};Start-Sleep -Milliseconds 500}
   Result @{found=$true;single=($best -eq 0);five=($best -ge 4);thumbnailCount=$best;total=if($best -eq 0){1}elseif($best -ge 4){5}else{$best+1}}
@@ -733,26 +747,26 @@ if($Action -eq 'inspect-save-dialog-controls'){
 }
 if($Action -eq 'save-viewer-images'){
   CloseVisibleSaveDialogs|Out-Null
-  $initialMain=WaitForGeneratedMainImage 45
-  if(-not $initialMain){throw 'Image viewer main image was not found after waiting 45 seconds'}
-  $needed=[int]$payload.needed; $startNumber=[int]$payload.startNumber; $targetDir=[string]$payload.targetDir; $fileStem=[string]$payload.fileStem; $already=@($payload.processedIndexes|ForEach-Object{[int]$_}); $saved=@()
+  $initialMain=WaitForGeneratedMainImage 15
+  if(-not $initialMain){throw 'Image viewer main image was not found after waiting 15 seconds'}
+  $needed=[int]$payload.needed; $startNumber=[int]$payload.startNumber; $targetDir=[string]$payload.targetDir; $fileStem=[string]$payload.fileStem; $already=@($payload.processedIndexes|ForEach-Object{[int]$_}); $saved=@();$failed=@()
   $initialThumbs=@(FindViewerThumbnails $initialMain);$selectedInfo=GetSelectedThumbnailIndex $initialThumbs;$selectedThumbIndex=[int]$selectedInfo.index
   # ChatGPT currently has two viewer layouts. Some machines expose all five thumbnails;
   # others expose only the four alternatives beside the current large image.
-  $thumbnailSequence=@()
-  if($initialThumbs.Count -ge 5){for($i=0;$i -lt 5;$i++){$thumbnailSequence+=$i}}
-  else{$thumbnailSequence+=-1;for($i=0;$i -lt $initialThumbs.Count;$i++){$thumbnailSequence+=$i}}
+  $thumbnailSequence=@(-1)
+  for($i=0;$i -lt $initialThumbs.Count;$i++){if($i -ne $selectedThumbIndex){$thumbnailSequence+=$i}}
   $candidateTotal=[Math]::Min(5,$thumbnailSequence.Count);$previousFingerprint=$null
   for($slot=0;$slot -lt $candidateTotal;$slot++){
+    if($saved.Count -ge $needed){break}
     $total=$candidateTotal; if($already -contains $slot){continue}
     $thumbIndex=[int]$thumbnailSequence[$slot]
     if($thumbIndex -ge 0){
       $selected=SelectViewerThumbnail $thumbIndex $previousFingerprint
-      if(-not $selected){throw "Main image did not change after selecting thumbnail $thumbIndex"}
+      if(-not $selected){$failed+=@{index=$slot;reason="Main image did not change after selecting thumbnail $thumbIndex"};continue}
       $main=$selected.main;$previousFingerprint=$selected.fingerprint
     }else{
       $viewer=WaitForViewerAfterSave 0
-      if(-not $viewer -or -not $viewer.main){throw "Image viewer main image was not found for thumbnail $slot after 3 attempts"}
+      if(-not $viewer -or -not $viewer.main){$failed+=@{index=$slot;reason="Image viewer main image was not found for thumbnail $slot"};continue}
       $main=$viewer.main;$previousFingerprint=GetImageRegionFingerprint $main
     }
     $number=$startNumber
@@ -760,13 +774,13 @@ if($Action -eq 'save-viewer-images'){
     $before=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|ForEach-Object{$_.FullName})
     $saveNames=@('Save image as','Save image as...','Save image as (V)',"$saveImageAs","$saveImageAs(V)","$saveImageAs(&V)","$saveAsWord","$saveAsWord(S)","$saveAsWord(&S)")
     $submitted=$false
-    for($menuAttempt=0;$menuAttempt -lt 3 -and -not $submitted;$menuAttempt++){
+    for($menuAttempt=0;$menuAttempt -lt 2 -and -not $submitted;$menuAttempt++){
       [Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 350
       $main=FindGeneratedMainImage $false; if(-not $main){$main=FindGeneratedMainImage $true}; if(-not $main){continue}
       $mainRect=$main.rect; $clickX=[int]($mainRect.X+$mainRect.Width/2); $clickY=[int]($mainRect.Y+$mainRect.Height/2)
       RightClickElement $main.element|Out-Null
       $desktop=[Windows.Automation.AutomationElement]::RootElement; $edgeRect=(Root).Current.BoundingRectangle; $saveAs=$null
-      for($i=0;$i -lt 20;$i++){$saveAs=FindExactNameNearPoint $desktop $saveNames $clickX $clickY $edgeRect;if(-not $saveAs){$saveAs=FindExactNameInProcess $desktop $saveNames 'msedge'};if($saveAs){break};Start-Sleep -Milliseconds 150}
+      for($i=0;$i -lt 10;$i++){$saveAs=FindExactNameNearPoint $desktop $saveNames $clickX $clickY $edgeRect;if(-not $saveAs){$saveAs=FindExactNameInProcess $desktop $saveNames 'msedge'};if($saveAs){break};Start-Sleep -Milliseconds 150}
       if(-not $saveAs){continue}
       ClickElement $saveAs|Out-Null; Start-Sleep -Milliseconds 700
       try{SubmitSavePath (Join-Path $targetDir $baseName);$submitted=$true}catch{
@@ -776,15 +790,15 @@ if($Action -eq 'save-viewer-images'){
         Start-Sleep -Milliseconds 500
       }
     }
-    if(-not $submitted){throw "Save image as failed for thumbnail $slot after 3 attempts. Last error: $lastSaveError"}
-    $savedFile=$null;for($i=0;$i -lt 60;$i++){Start-Sleep -Milliseconds 500;$new=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$before -notcontains $_.FullName -and $_.BaseName -eq $baseName -and $_.Extension -ne '.crdownload'});if($new.Count){$savedFile=$new[0].FullName;break}};if(-not $savedFile){throw "Saved file did not appear for thumbnail $slot"}
+    if(-not $submitted){$failed+=@{index=$slot;reason="Save image as failed for thumbnail $slot after 2 attempts. Last error: $lastSaveError"};continue}
+    $savedFile=$null;for($i=0;$i -lt 20;$i++){Start-Sleep -Milliseconds 500;$new=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$before -notcontains $_.FullName -and $_.BaseName -eq $baseName -and $_.Extension -ne '.crdownload'});if($new.Count){$savedFile=$new[0].FullName;break}};if(-not $savedFile){$failed+=@{index=$slot;reason="Saved file did not appear for thumbnail $slot"};continue}
     # Do not press Escape here: depending on Edge/Windows version it can close the
     # image viewer itself, leaving only the first image available on the next pass.
     CloseDownloadsFlyoutIfOpen|Out-Null
     $viewerAfterSave=WaitForViewerAfterSave 0
-    if($slot -lt ($candidateTotal-1) -and (-not $viewerAfterSave -or -not $viewerAfterSave.main)){throw "Image viewer closed after saving thumbnail $slot"}
     Start-Sleep -Milliseconds 400;$saved+=@{index=$slot;file=$savedFile;total=$total}
+    if($slot -lt ($candidateTotal-1) -and (-not $viewerAfterSave -or -not $viewerAfterSave.main)){$failed+=@{index=$slot+1;reason="Image viewer closed after saving thumbnail $slot"};break}
   }
-  if($saved.Count){$totalResult=$saved[0].total}else{$totalResult=$candidateTotal}; Result @{saved=$saved;total=$totalResult;selectedThumbnailIndex=$selectedThumbIndex;selectedThumbnailAssumed=[bool]$selectedInfo.assumed}
+  if($saved.Count){$totalResult=$saved[0].total}else{$totalResult=$candidateTotal}; Result @{saved=$saved;failed=$failed;total=$totalResult;selectedThumbnailIndex=$selectedThumbIndex;selectedThumbnailAssumed=[bool]$selectedInfo.assumed}
 }
 throw "Unknown action: $Action"

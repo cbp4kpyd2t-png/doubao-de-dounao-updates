@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Forces all five images to use different people, ethnicities, faces, and clothing; keeps clear front-facing large people and all product-specific prompts within 500 Chinese characters.'
+  notes = 'Speeds up sequential image saving, keeps successful files when one thumbnail fails, shortens final rescans, repairs deferred-chat states, and verifies a real ChatGPT conversation URL before waiting for generation.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8
