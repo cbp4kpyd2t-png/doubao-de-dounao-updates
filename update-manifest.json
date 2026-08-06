@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.15",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.15/doubao-de-dounao-1.4.15-win-x64.zip",
-    "sha256":  "0887c489cf28edb78622f03f60a64740e3125b5942fcf89d8b8f73fad5fc7944",
-    "notes":  "Immediately promotes every approved generated image to the final product folder, including partial 1-4 image results, while preserving quality checks, deduplication, sequential naming, checkpoints, and safety circuit breakers.",
-    "publishedAt":  "2026-08-06T09:30:31.9214607Z"
+    "version":  "1.4.16",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.16/doubao-de-dounao-1.4.16-win-x64.zip",
+    "sha256":  "2b5810c9c624c95850bcb9d7edb05d54b645952d02189b7a1e68525e155116ed",
+    "notes":  "Speeds up sequential image saving by removing unnecessary fixed waits, automatically applies bounded randomized recovery to transient save and page failures, and keeps immediate manual safety holds for real login or security verification.",
+    "publishedAt":  "2026-08-06T11:10:08.7690503Z"
 }
