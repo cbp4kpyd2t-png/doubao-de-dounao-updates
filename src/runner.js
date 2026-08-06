@@ -448,7 +448,7 @@ class TaskRunner extends EventEmitter {
     entry.processedIndexes = processed.sort((a, b) => a - b);
     entry.detectedTotal = total;
     await this.syncPendingPoolState(context); await this.checkpoint();
-    this.log(isBackgroundTest ? `当前对话检测到${total}张，质量检查后保留${added.length}张，立即计入50张目标` : `已把当前对话新增的${added.length}张图片放入商品统一暂存池；暂不计正式图片数`);
+    this.log(`当前对话检测到${total}张，质量检查后保留${added.length}张，立即计入50张目标`);
     return added;
   }
 
@@ -460,16 +460,10 @@ class TaskRunner extends EventEmitter {
       const number = dirent.name.slice(stem.length + 1).split('.')[0]; if (/^\d{3}$/.test(number)) usedNumbers.add(Number(number));
     }
     while (context.ps.completed < 50) {
-      const remainder = context.ps.completed % 5;
-      const neededForRound = isBackgroundTest ? 1 : (remainder === 0 ? 5 : 5 - remainder);
-      const groups = new Map();
-      for (const item of context.ps.pendingPool.filter((candidate) => candidate.status === 'pending' && candidate.inputFingerprint)) {
-        if (!groups.has(item.inputFingerprint)) groups.set(item.inputFingerprint, []);
-        groups.get(item.inputFingerprint).push(item);
-      }
-      const candidates = isBackgroundTest
-        ? context.ps.pendingPool.filter((candidate) => candidate.status === 'pending').sort((a, b) => String(a.savedAt).localeCompare(String(b.savedAt)))
-        : [...groups.values()].map((items) => items.sort((a, b) => String(a.savedAt).localeCompare(String(b.savedAt)))).filter((items) => items.length >= neededForRound).sort((a, b) => String(a[0].savedAt).localeCompare(String(b[0].savedAt)))[0];
+      const neededForRound = 1;
+      const candidates = context.ps.pendingPool
+        .filter((candidate) => candidate.status === 'pending')
+        .sort((a, b) => String(a.savedAt).localeCompare(String(b.savedAt)));
       if (!candidates || !candidates.length) break;
       const selected = candidates.slice(0, neededForRound); const targets = selected.map((item) => {
         let number = 1; while (usedNumbers.has(number)) number += 1; usedNumbers.add(number);
@@ -491,7 +485,7 @@ class TaskRunner extends EventEmitter {
       const selectedFiles = new Set(selected.map((item) => item.file));
       context.ps.pendingPool = context.ps.pendingPool.filter((item) => !selectedFiles.has(item.file));
       context.ps.round = Math.min(10, Math.floor(context.ps.completed / 5));
-      this.log(isBackgroundTest ? `本对话图片已立即转入正式目录：当前${context.ps.completed}/50张` : `统一暂存池已补齐一组5张，已转入正式目录并计为第${context.ps.round}轮`);
+      this.log(`图片已立即转入正式目录：当前${context.ps.completed}/50张`);
       await this.syncPendingPoolState(context); await this.checkpoint();
     }
     return promoted;
@@ -667,7 +661,7 @@ class TaskRunner extends EventEmitter {
           try {
           await this.waitIfPaused();
           if (this.rateLimitRestartRequested) { await this.recoverAfterRateLimitCooldown('界面监控触发的限流冷却结束'); this.rateLimitRestartRequested = false; }
-          const nextRound = isBackgroundTest ? (ps.chatAttempts % 10) + 1 : ps.round + 1; this.detectedImages = 0;
+          const nextRound = (ps.chatAttempts % 10) + 1; this.detectedImages = 0;
           const latestProduct = await scanProductDirectory(product.dir, product.name, { round: nextRound, maxImages: 10 });
           if (!latestProduct.valid) { const reason = `商品“${product.name}”上传前重新检查发现缺少有效参考图或TXT提示词，已自动跳过并进入下一个商品`; this.log(reason); ps.status = 'skipped'; ps.skipReason = reason; this.state.skippedProducts ||= []; this.state.skippedProducts.push({ productId: product.id, reason, skippedAt: new Date().toISOString() }); this.recoveryContext = null; await this.checkpoint(); break roundLoop; }
           if (JSON.stringify(latestProduct.images) !== JSON.stringify(product.images) || latestProduct.prompt !== product.prompt) this.log(`商品“${product.name}”文件夹内容已变化，本轮将使用最新的${latestProduct.images.length}张参考图和TXT提示词`);

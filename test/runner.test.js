@@ -161,12 +161,14 @@ test('无图片生成超时不刷新当前页面而由下一轮直接开启新�
   assert.match(source, /status: 'pending'/);
 });
 
-test('一到四张图片只暂存不计轮次并延后回查', () => {
+test('一到四张图片立即计入正式数量并保留延后回查', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
   assert.match(source, /generationResult\?\.status === 'partial'/);
   assert.match(source, /await this\.stageChatImagesToPool/);
   assert.match(source, /'\.pending_pool'/);
-  assert.match(source, /暂不计正式图片数/);
+  assert.match(source, /立即计入50张目标/);
+  assert.match(source, /const neededForRound = 1/);
+  assert.match(source, /const nextRound = \(ps\.chatAttempts % 10\) \+ 1/);
   assert.doesNotMatch(source, /ps\.round = Math\.max\(0, ps\.round - 1\)/);
   assert.match(source, /continue roundLoop/);
 });
@@ -298,12 +300,12 @@ test('后台版把多个对话已保存图片立即计入50张目标', async () 
   const finalFiles = (await fsp.readdir(outputDir, { withFileTypes: true })).filter((item) => item.isFile() && /^商品_\d{3}\./.test(item.name)); assert.equal(finalFiles.length, 5);
 });
 
-test.skip('后台版不等待同一输入版本凑满五张并按保存时间立即转正', async () => {
+test('正式版不等待同一输入版本凑满五张并按保存时间立即转正', async () => {
   const fs = require('node:fs'); const fsp = fs.promises; const os = require('node:os'); const path = require('node:path'); const sharp = require('sharp'); const { validateImage } = require('../src/core');
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'ecom-pool-version-')); const outputDir = path.join(root, '商品'); const poolDir = path.join(outputDir, '.pending_pool'); await fsp.mkdir(poolDir, { recursive: true }); const pendingPool = []; const hashes = new Set();
-  for (let i = 0; i < 5; i += 1) { const file = path.join(poolDir, `候选_${i}.png`); await sharp({ create: { width: 4, height: 4, channels: 3, background: ['red', 'blue', 'green', 'yellow', 'black'][i] } }).png().toFile(file); const info = await validateImage(file, hashes); hashes.add(info.hash); pendingPool.push({ file, ...info, sourceChatId: `chat-${i}`, inputFingerprint: i < 2 ? 'version-a' : 'version-b', savedAt: new Date(Date.now() + i).toISOString(), status: 'pending' }); }
+  for (let i = 0; i < 3; i += 1) { const file = path.join(poolDir, `候选_${i}.png`); await sharp({ create: { width: 4, height: 4, channels: 3, background: ['red', 'blue', 'green'][i] } }).png().toFile(file); const info = await validateImage(file, hashes); hashes.add(info.hash); pendingPool.push({ file, ...info, sourceChatId: `chat-${i}`, inputFingerprint: i < 2 ? 'version-a' : 'version-b', savedAt: new Date(Date.now() + i).toISOString(), status: 'pending' }); }
   const runner = new TaskRunner('user-data', 'downloads'); runner.state = { runId: 'run-1' }; runner.checkpoint = async () => {}; const context = { ps: { outputDir, completed: 0, round: 0, hashes: [], pendingPool }, hashes: new Set(), productName: '商品', productId: '商品', productPrompt: '提示', outputs: root, cycle: 1 };
-  assert.equal((await runner.promotePendingPool(context)).length, 5); assert.equal(context.ps.pendingPool.length, 0); assert.equal(context.ps.completed, 5);
+  assert.equal((await runner.promotePendingPool(context)).length, 3); assert.equal(context.ps.pendingPool.length, 0); assert.equal(context.ps.completed, 3); assert.equal(context.ps.round, 0);
 });
 
 test('内容政策拒绝立即跳过当前对话且不进入超时回查', () => {

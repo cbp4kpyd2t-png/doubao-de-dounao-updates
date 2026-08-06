@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Adds a safety circuit breaker: login or security checks stop page actions immediately; repeated upload, save, or page recovery failures preserve the checkpoint and require manual confirmation; removes automatic Edge restarts and unbounded refresh loops.'
+  notes = 'Immediately promotes every approved generated image to the final product folder, including partial 1-4 image results, while preserving quality checks, deduplication, sequential naming, checkpoints, and safety circuit breakers.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8
