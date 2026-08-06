@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.14",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.14/doubao-de-dounao-1.4.14-win-x64.zip",
-    "sha256":  "58c109d7da3076ef5ba95d7ade91dd24c4fcb5d8d98c0b3a96f8e68dd6242259",
-    "notes":  "Adds a safety circuit breaker: login or security checks stop page actions immediately; repeated upload, save, or page recovery failures preserve the checkpoint and require manual confirmation; removes automatic Edge restarts and unbounded refresh loops.",
-    "publishedAt":  "2026-08-06T08:49:59.1939532Z"
+    "version":  "1.4.15",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.15/doubao-de-dounao-1.4.15-win-x64.zip",
+    "sha256":  "0887c489cf28edb78622f03f60a64740e3125b5942fcf89d8b8f73fad5fc7944",
+    "notes":  "Immediately promotes every approved generated image to the final product folder, including partial 1-4 image results, while preserving quality checks, deduplication, sequential naming, checkpoints, and safety circuit breakers.",
+    "publishedAt":  "2026-08-06T09:30:31.9214607Z"
 }
