@@ -100,7 +100,8 @@ test('保存失败会关闭保存界面并返回原ChatGPT对话后继续', () =
   assert.match(automation, /filesBeforeSave/); assert.match(automation, /清理\$\{failedFiles\.length\}个未计数文件/);
   assert.match(automation, /__SAVE_FAILED_RECOVERED__/); assert.match(automation, /__SAVE_RECOVERY_FAILED__/);
   assert.match(runner, /error\.message\.startsWith\('__SAVE_FAILED_RECOVERED__'\)/);
-  assert.match(runner, /保存失败界面已关闭并返回ChatGPT；本次只开启新对话，不刷新页面/);
+  assert.match(runner, /保存失败界面已关闭并返回ChatGPT；当前对话已保留回查断点/);
+  assert.match(runner, /不刷新页面、不要求人工确认/);
 });
 
 test('保存前使用最小空缺编号且不复用旧文件', () => {
@@ -217,10 +218,13 @@ test('轮次等待设置写入任务状态并可在断点继续时恢复', () =>
   assert.match(source, /轮次等待已关闭，立即打开下一新对话/);
 });
 
-test('可恢复故障只有一次页面恢复机会，连续失败会安全暂停', () => {
+test('可恢复故障采用随机冷却，十分钟内第三次页面异常才安全暂停', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8'); const automation = fs.readFileSync(require.resolve('../src/automation'), 'utf8');
   assert.match(source, /正在执行唯一一次ChatGPT页面恢复/);
-  assert.match(source, /15分钟内连续\$\{safetyFailures\}次页面、上传或保存异常/);
+  assert.match(source, /10分钟内连续\$\{safetyFailures\}次页面或上传恢复异常/);
+  assert.match(source, /waitForRecoveryJitter/);
+  assert.match(source, /保存快速恢复/);
+  assert.match(source, /页面冷却恢复/);
   assert.match(source, /await this\.enterSafetyHold/);
   assert.doesNotMatch(source, /任务不会暂停；等待10秒后继续尝试/);
   assert.match(automation, /async recoverToFreshChatPage\(\)/);
@@ -566,11 +570,22 @@ test('安全检查第一次出现就暂停，人工继续会清除熔断状态',
   assert.equal(runner.paused, false); assert.equal(runner.state.status, 'active'); assert.equal(runner.snapshot().safetyHold, false);
 });
 
-test('十五分钟窗口内第二次恢复故障达到安全暂停阈值', () => {
+test('十分钟窗口内第三次页面故障达到安全暂停阈值，保存故障单独计数', () => {
   const runner = new TaskRunner('user-data', 'downloads'); runner.state = {};
   assert.equal(runner.recordSafetyFailure('first'), 1);
   assert.equal(runner.recordSafetyFailure('second'), 2);
-  assert.equal(runner.state.safety.recoveryFailures, 2);
+  assert.equal(runner.recordSafetyFailure('third'), 3);
+  assert.equal(runner.state.safety.recoveryFailures, 3);
+  assert.equal(runner.recordTransientSaveFailure('save-first'), 1);
+  assert.equal(runner.recordTransientSaveFailure('save-second'), 2);
+  assert.equal(runner.state.safety.saveRecoveryFailures, 2);
+});
+
+test('随机恢复等待支持零时长确定性测试且不会触发人工暂停', async () => {
+  const runner = new TaskRunner('user-data', 'downloads'); runner.running = true; runner.state = {}; runner.log = () => {};
+  const seconds = await runner.waitForRecoveryJitter('保存快速恢复', 0, 0, () => 0);
+  assert.equal(seconds, 0);
+  assert.equal(runner.paused, false);
 });
 
 test('界面监控限流会退出原生成等待并重启当前轮次', () => {

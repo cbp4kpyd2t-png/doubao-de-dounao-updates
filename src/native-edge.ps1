@@ -250,8 +250,15 @@ function GetImageFingerprintDistance($left,$right){
   return $sum/$a.Count
 }
 function WaitForViewerAfterSave($minimumThumbs=0){
-  FocusEdge|Out-Null
-  $deadline=[DateTime]::UtcNow.AddSeconds(4);$best=$null
+  # The Save As dialog normally returns focus to Edge by itself. Try the fast
+  # path first and only force/focus Edge when the viewer is not immediately
+  # visible; forcing focus on every image costs about half a second each time.
+  $main=FindGeneratedMainImage $false
+  if($main){
+    $thumbs=@(FindViewerThumbnails $main)
+    if($thumbs.Count -ge $minimumThumbs){return @{main=$main;thumbs=$thumbs}}
+  }else{FocusEdge|Out-Null}
+  $deadline=[DateTime]::UtcNow.AddSeconds(2);$best=$null
   while([DateTime]::UtcNow -lt $deadline){
     $main=FindGeneratedMainImage $false
     if(-not $main){$main=FindGeneratedMainImage $true}
@@ -275,10 +282,12 @@ function DownloadsFlyoutIsOpen(){
   }
   return $false
 }
-function CloseDownloadsFlyoutIfOpen(){
-  # Edge opens the downloads flyout asynchronously after the file appears.
-  # Poll long enough to catch it instead of checking only once too early.
-  $deadline=[DateTime]::UtcNow.AddSeconds(4);$seen=$false
+function CloseDownloadsFlyoutIfOpen($maxWaitMilliseconds=700){
+  # Most saves do not open the Downloads flyout. Keep this probe short; if a
+  # delayed flyout later covers a thumbnail, EnsureThumbnailPointIsClear will
+  # close it immediately before the click.
+  $boundedWait=[Math]::Max(0,[Math]::Min(1500,[int]$maxWaitMilliseconds))
+  $deadline=[DateTime]::UtcNow.AddMilliseconds($boundedWait);$seen=$false
   while([DateTime]::UtcNow -lt $deadline){
     if(DownloadsFlyoutIsOpen){$seen=$true;break}
     Start-Sleep -Milliseconds 200
@@ -794,9 +803,9 @@ if($Action -eq 'save-viewer-images'){
     $savedFile=$null;for($i=0;$i -lt 20;$i++){Start-Sleep -Milliseconds 500;$new=@(Get-ChildItem -LiteralPath $targetDir -File -ErrorAction SilentlyContinue|Where-Object{$before -notcontains $_.FullName -and $_.BaseName -eq $baseName -and $_.Extension -ne '.crdownload'});if($new.Count){$savedFile=$new[0].FullName;break}};if(-not $savedFile){$failed+=@{index=$slot;reason="Saved file did not appear for thumbnail $slot"};continue}
     # Do not press Escape here: depending on Edge/Windows version it can close the
     # image viewer itself, leaving only the first image available on the next pass.
-    CloseDownloadsFlyoutIfOpen|Out-Null
+    CloseDownloadsFlyoutIfOpen 700|Out-Null
     $viewerAfterSave=WaitForViewerAfterSave 0
-    Start-Sleep -Milliseconds 400;$saved+=@{index=$slot;file=$savedFile;total=$total}
+    Start-Sleep -Milliseconds 100;$saved+=@{index=$slot;file=$savedFile;total=$total}
     if($slot -lt ($candidateTotal-1) -and (-not $viewerAfterSave -or -not $viewerAfterSave.main)){$failed+=@{index=$slot+1;reason="Image viewer closed after saving thumbnail $slot"};break}
   }
   if($saved.Count){$totalResult=$saved[0].total}else{$totalResult=$candidateTotal}; Result @{saved=$saved;failed=$failed;total=$totalResult;selectedThumbnailIndex=$selectedThumbIndex;selectedThumbnailAssumed=[bool]$selectedInfo.assumed}

@@ -31,24 +31,40 @@ class TaskRunner extends EventEmitter {
   emitStatus(extra = {}) { if (extra.phase && extra.phase !== this.currentPhase) { this.currentPhase = extra.phase; this.resetWatchdogSamples(); } this.emit('status', this.snapshot({ currentCycle: this.state?.currentCycle || 0, totalCycles: this.state?.totalCycles || 1, ...extra })); }
   log(message) { const line = `[${new Date().toLocaleString('zh-CN')}] ${message}`; this.emit('log', line); if (this.logFile) fs.appendFileSync(this.logFile, `${line}\r\n`, 'utf8'); }
   pause(reason = '用户暂停', showAlert = reason !== '用户暂停') { this.paused = true; if (this.state) this.state.status = 'paused'; this.checkpoint().catch(() => {}); this.log(reason); this.emitStatus({ phase: '已暂停', message: reason }); if (showAlert) this.emit('alert', { title: '任务需要处理', message: reason }); }
-  resume() { if (!this.running) return; const safety = this.ensureSafetyState(); if (safety.status === 'hold') { this.log(`用户已确认处理安全暂停：${safety.reason || '页面异常'}`); safety.status = 'ready'; safety.reason = null; safety.heldAt = null; safety.holdUntil = null; safety.manualResumeRequired = false; safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; } this.paused = false; this.workflowRecoveryRequested = false; this.resetWatchdogSamples(); if (this.state) this.state.status = 'active'; this.checkpoint().catch(() => {}); this.log('任务继续'); this.emitStatus({ phase: '继续中' }); }
+  resume() { if (!this.running) return; const safety = this.ensureSafetyState(); if (safety.status === 'hold') { this.log(`用户已确认处理安全暂停：${safety.reason || '页面异常'}`); safety.status = 'ready'; safety.reason = null; safety.heldAt = null; safety.holdUntil = null; safety.manualResumeRequired = false; safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; safety.saveRecoveryFailures = 0; safety.saveFailureWindowStartedAt = null; } this.paused = false; this.workflowRecoveryRequested = false; this.resetWatchdogSamples(); if (this.state) this.state.status = 'active'; this.checkpoint().catch(() => {}); this.log('任务继续'); this.emitStatus({ phase: '继续中' }); }
   stop() { this.stopped = true; this.paused = false; if (this.state) this.state.status = 'stopped'; this.checkpoint().catch(() => {}); this.log('任务将在当前安全步骤后停止'); }
   async shutdown() { this.stopWatchdog(); this.stop(); await this.checkpoint().catch(() => {}); await this.browser?.close(); this.browser = null; }
   async checkpoint() { if (this.stateFile && this.state) await atomicWriteJson(this.stateFile, this.state); }
   async waitIfPaused() { while (this.paused && !this.stopped) await sleep(500); if (this.stopped) throw new Error('__STOPPED__'); }
   ensureSafetyState() {
     if (!this.state) return { status: 'ready', recoveryFailures: 0 };
-    this.state.safety ||= { version: 1, status: 'ready', recoveryFailures: 0, failureWindowStartedAt: null, reason: null, heldAt: null, holdUntil: null, manualResumeRequired: false };
+    this.state.safety ||= { version: 2, status: 'ready', recoveryFailures: 0, failureWindowStartedAt: null, saveRecoveryFailures: 0, saveFailureWindowStartedAt: null, reason: null, heldAt: null, holdUntil: null, manualResumeRequired: false };
+    this.state.safety.version = Math.max(2, Number(this.state.safety.version) || 1);
     return this.state.safety;
   }
   isSecurityOrLoginError(error) { return /__LOGIN_REQUIRED__|__SECURITY|验证码|安全检查|安全验证|登录入口|退出登录|账号.*(?:停用|封禁|禁用)|account.*(?:deactivat|suspend|block)|verify you are human/i.test(String(error?.message || error || '')); }
   recordSafetyFailure(reason) {
     const safety = this.ensureSafetyState(); const now = Date.now(); const started = Date.parse(safety.failureWindowStartedAt || '');
-    if (!Number.isFinite(started) || now - started > 15 * 60000) { safety.failureWindowStartedAt = new Date(now).toISOString(); safety.recoveryFailures = 0; }
+    if (!Number.isFinite(started) || now - started > 10 * 60000) { safety.failureWindowStartedAt = new Date(now).toISOString(); safety.recoveryFailures = 0; }
     safety.recoveryFailures = Math.max(0, Number(safety.recoveryFailures) || 0) + 1; safety.lastFailureAt = new Date(now).toISOString(); safety.lastFailure = String(reason || '页面异常');
     return safety.recoveryFailures;
   }
-  resetSafetyFailures() { const safety = this.ensureSafetyState(); safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; safety.lastFailure = null; }
+  recordTransientSaveFailure(reason) {
+    const safety = this.ensureSafetyState(); const now = Date.now(); const started = Date.parse(safety.saveFailureWindowStartedAt || '');
+    if (!Number.isFinite(started) || now - started > 10 * 60000) { safety.saveFailureWindowStartedAt = new Date(now).toISOString(); safety.saveRecoveryFailures = 0; }
+    safety.saveRecoveryFailures = Math.max(0, Number(safety.saveRecoveryFailures) || 0) + 1; safety.lastSaveFailureAt = new Date(now).toISOString(); safety.lastSaveFailure = String(reason || '保存界面异常');
+    return safety.saveRecoveryFailures;
+  }
+  resetSafetyFailures() {
+    const safety = this.ensureSafetyState(); safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; safety.lastFailure = null;
+    safety.saveRecoveryFailures = 0; safety.saveFailureWindowStartedAt = null; safety.lastSaveFailure = null;
+  }
+  async waitForRecoveryJitter(label, minSeconds, maxSeconds, random = Math.random) {
+    const delayMs = randomDelayMs(random, minSeconds, maxSeconds); const seconds = Math.max(0, Math.ceil(delayMs / 1000)); const until = Date.now() + delayMs;
+    this.log(`${label}：随机等待${seconds}秒后自动继续`); this.emitStatus({ phase: label, remainingSeconds: seconds });
+    while (Date.now() < until) { await this.waitIfPaused(); const remainingMs = until - Date.now(); this.emitStatus({ phase: label, remainingSeconds: Math.max(0, Math.ceil(remainingMs / 1000)) }); await sleep(Math.min(500, remainingMs)); }
+    return seconds;
+  }
   async enterSafetyHold(reason, { recommendedMinutes = 30 } = {}) {
     const safety = this.ensureSafetyState(); const message = String(reason || '检测到需要人工处理的页面异常');
     if (safety.status === 'hold' && this.paused) return;
@@ -781,11 +797,22 @@ class TaskRunner extends EventEmitter {
             this.log(`当前轮次异常：${error.message}；已保存断点并进入有界恢复判断`);
             await this.checkpoint();
             if (this.isSecurityOrLoginError(error)) { await this.enterSafetyHold(`检测到登录或安全验证异常：${error.message}`); await this.waitIfPaused(); continue roundLoop; }
+            if (savePageRecovered) {
+              const saveFailures = this.recordTransientSaveFailure(error.message); await this.checkpoint();
+              const shortRecovery = saveFailures <= 1;
+              await this.waitForRecoveryJitter(`保存快速恢复（第${saveFailures}次）`, shortRecovery ? 2 : (saveFailures === 2 ? 6 : 15), shortRecovery ? 5 : (saveFailures === 2 ? 12 : 35));
+              this.log('保存失败界面已关闭并返回ChatGPT；当前对话已保留回查断点，将直接开启新对话，不刷新页面、不要求人工确认');
+              continue roundLoop;
+            }
             const safetyFailures = this.recordSafetyFailure(error.message); await this.checkpoint();
-            if (savePageRecovered && safetyFailures < 2) { this.log('保存失败界面已关闭并返回ChatGPT；本次只开启新对话，不刷新页面'); continue roundLoop; }
-            if (safetyFailures >= 2) { await this.enterSafetyHold(`15分钟内连续${safetyFailures}次页面、上传或保存异常：${error.message}`); await this.waitIfPaused(); continue roundLoop; }
+            if (safetyFailures >= 3) { await this.enterSafetyHold(`10分钟内连续${safetyFailures}次页面或上传恢复异常：${error.message}`); await this.waitIfPaused(); continue roundLoop; }
+            await this.waitForRecoveryJitter(`页面冷却恢复（第${safetyFailures}次）`, 15, 35);
             const recovered = await this.recoverToFreshChatPage(error.message);
-            if (!recovered) { await this.enterSafetyHold(`唯一一次页面恢复失败：${error.message}`); await this.waitIfPaused(); }
+            if (!recovered) {
+              const recoveryFailures = this.recordSafetyFailure(`页面恢复失败：${error.message}`); await this.checkpoint();
+              if (recoveryFailures >= 3) { await this.enterSafetyHold(`10分钟内连续${recoveryFailures}次页面恢复异常：${error.message}`); await this.waitIfPaused(); }
+              else { await this.waitForRecoveryJitter(`页面恢复未成功（第${recoveryFailures}次）`, 20, 40); this.log('本次页面恢复未成功，已保留断点；尚未达到人工暂停阈值，将在新一轮重新检查页面'); }
+            }
             continue roundLoop;
           }
         }

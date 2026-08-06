@@ -84,13 +84,16 @@ test('查看器兼容五缩略图和当前大图加四缩略图两种布局', ()
   assert.match(saveAction, /Image viewer closed after saving thumbnail/);
   assert.match(script, /function DownloadsFlyoutIsOpen/);
   assert.match(script, /function CloseDownloadsFlyoutIfOpen/);
+  assert.match(script, /CloseDownloadsFlyoutIfOpen\(\$maxWaitMilliseconds=700\)/);
+  assert.match(script, /AddMilliseconds\(\$boundedWait\)/);
+  assert.match(saveAction, /CloseDownloadsFlyoutIfOpen 700/);
   assert.match(script, /function ThumbnailPointIsClear/);
   assert.match(script, /AutomationElement\]::FromPoint/);
   assert.match(script, /function EnsureThumbnailPointIsClear/);
   assert.match(script, /if\(FindVisibleSaveDialog\)\{/);
   assert.match(script, /if\(-not \(EnsureThumbnailPointIsClear \$thumb\.element\)\)\{continue\}/);
   assert.match(script, /\^Open file\$\|\^Show in folder\$/);
-  assert.match(script, /AddSeconds\(4\)/);
+  assert.match(script, /EnsureThumbnailPointIsClear will/);
   assert.match(script, /\$edgePids -contains \$el\.Current\.ProcessId/);
   assert.match(saveAction, /CloseDownloadsFlyoutIfOpen/);
   assert.match(saveAction, /CloseVisibleSaveDialogs\|Out-Null/);

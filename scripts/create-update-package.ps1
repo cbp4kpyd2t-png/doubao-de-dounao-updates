@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Immediately promotes every approved generated image to the final product folder, including partial 1-4 image results, while preserving quality checks, deduplication, sequential naming, checkpoints, and safety circuit breakers.'
+  notes = 'Speeds up sequential image saving by removing unnecessary fixed waits, automatically applies bounded randomized recovery to transient save and page failures, and keeps immediate manual safety holds for real login or security verification.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8
