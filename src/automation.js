@@ -50,7 +50,7 @@ class ChatGPTAutomation {
   }
   async inspectWatchState() {
     const state = await runNative('inspect');
-    return { found: state.found, title: state.title, hasComposer: state.hasComposer, hasSecurity: state.hasSecurity, hasRateLimit: !!state.hasRateLimit, hasStop: state.hasStop, downloadCount: state.downloadCount || 0, generatedCount: state.generatedCount || 0, attachmentCount: state.attachmentCount || 0, submitEnabled: !!state.submitEnabled };
+    return { found: state.found, title: state.title, hasComposer: state.hasComposer, hasSecurity: state.hasSecurity, hasLogin: state.hasLogin, hasRateLimit: !!state.hasRateLimit, hasStop: state.hasStop, downloadCount: state.downloadCount || 0, generatedCount: state.generatedCount || 0, attachmentCount: state.attachmentCount || 0, submitEnabled: !!state.submitEnabled };
   }
   async getCurrentChatUrl() { const result = await runNative('get-current-chat-url'); return result.isChat ? result.url : null; }
   async waitForStableCurrentChatUrl(timeoutMs = 30000) {
@@ -103,7 +103,7 @@ class ChatGPTAutomation {
     this.currentChatUrl = null;
   }
   async uploadReferences(files, shouldAbort = () => false, options = {}) {
-    const maxRefreshCycles = Math.max(0, Math.min(5, Number(options.maxRefreshCycles ?? 2)));
+    const maxRefreshCycles = Math.max(0, Math.min(1, Number(options.maxRefreshCycles ?? 0)));
     const deadlineAt = Number(options.deadlineAt) || (Date.now() + 240000);
     const checkAbort = () => {
       const reason = shouldAbort();
@@ -114,7 +114,7 @@ class ChatGPTAutomation {
     while (this.connected) {
       checkAbort();
       let lastError = null;
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
         checkAbort();
         try {
           const result = await runNative('upload', { files }, 90000);
@@ -128,10 +128,10 @@ class ChatGPTAutomation {
           await sleep(250);
           return { expected: files.length, attached: attachmentCount, incomplete: attachmentCount < files.length };
         } catch (error) {
-          lastError = error; this.log(`参考图上传未完整（第 ${attempt}/3 次）：${error.message}`);
+          lastError = error; this.log(`参考图上传未完整（第 ${attempt}/2 次）：${error.message}`);
           const cleared = await runNative('clear-attachments', {}, 45000).catch(() => ({ ok: false }));
           if (!cleared.ok) { this.log('无法清除不完整附件，将通过刷新页面恢复'); break; }
-          if (attempt < 3) { this.log('已删除全部附件，正在重新上传所有参考图'); await sleep(350); }
+          if (attempt < 2) { this.log('已删除全部附件，正在重新上传所有参考图；本次失败后将进入安全暂停'); await sleep(350); }
         }
       }
       refreshCycle += 1;
@@ -156,7 +156,7 @@ class ChatGPTAutomation {
     const images = Array.isArray(options.images) ? options.images : [];
     const timeoutSeconds = Math.max(15, Math.min(300, Math.trunc(Number(options.timeoutSeconds) || 180)));
     await this.newChat();
-    if (images.length) await this.uploadReferences(images, () => false, { maxRefreshCycles: 1, deadlineAt: Date.now() + 180000 });
+    if (images.length) await this.uploadReferences(images, () => false, { maxRefreshCycles: 0, deadlineAt: Date.now() + 180000 });
     if (this.expectedAttachments > 0) {
       const verified = await runNative('verify-attachments', { expected: this.expectedAttachments }, 90000);
       if (!verified.ok) throw new Error(`AI分析发送前附件校验失败：应有${this.expectedAttachments}张，实际${verified.attachmentCount || 0}张`);

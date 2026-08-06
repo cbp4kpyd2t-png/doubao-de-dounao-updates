@@ -12,7 +12,7 @@ test('本地和HTTPS清单均可安全解析相对更新包', () => {
 test('界面顶部明显显示从主进程读取的实际版本号', () => {
   const fs = require('node:fs'); const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'index.html'), 'utf8'); const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'renderer.js'), 'utf8');
   const headerEnd = html.indexOf('</header>'); const versionAt = html.indexOf('id="appVersion"');
-  assert.ok(versionAt > 0 && versionAt < headerEnd); assert.match(renderer, /当前版本 v\$\{await window\.appApi\.getVersion\(\)\}/); assert.match(html, /version\.css/);
+  assert.ok(versionAt > 0 && versionAt < headerEnd); assert.match(renderer, /window\.appApi\.getEdition\(\)/); assert.match(renderer, /当前版本 v\$\{version\}\$\{backgroundTest \? ' · 后台测试版' : ' · 正式版'\}/); assert.match(html, /version\.css/);
 });
 test('空白或旧默认更新源自动迁移到公开HTTPS更新地址', async () => {
   const fs = require('node:fs'); const fsp = fs.promises; const os = require('node:os'); const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'update-unconfigured-')); const installDir = path.join(dir, 'app'); await fsp.mkdir(dir, { recursive: true });
@@ -55,7 +55,7 @@ test('更新下载自动兼容Windows系统代理和分协议代理格式', () =
 });
 test('品牌名称统一改为豆包的豆脑且保留内部数据标识', () => {
   const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')); const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'index.html'), 'utf8'); const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
-  assert.equal(pkg.build.productName, '豆包的豆脑'); assert.equal(pkg.build.nsis.shortcutName, '豆包的豆脑'); assert.match(pkg.build.win.artifactName, /^豆包的豆脑-/); assert.equal(pkg.name, 'ecommerce-main-image-generator'); assert.match(html, /<h1>豆包的豆脑<\/h1>/); assert.match(main, /title: '豆包的豆脑'/);
+  assert.equal(pkg.build.productName, '豆包的豆脑'); assert.equal(pkg.build.nsis.shortcutName, '豆包的豆脑'); assert.match(pkg.build.win.artifactName, /^豆包的豆脑-/); assert.equal(pkg.name, 'ecommerce-main-image-generator'); assert.match(html, /<h1>豆包的豆脑<\/h1>/); assert.match(main, /title: edition\.title/);
 });
 test('公开更新仓库地址与发布包地址配置一致', () => {
   const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));

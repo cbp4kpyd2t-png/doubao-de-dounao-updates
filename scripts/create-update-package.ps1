@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Speeds up sequential image saving, keeps successful files when one thumbnail fails, shortens final rescans, repairs deferred-chat states, and verifies a real ChatGPT conversation URL before waiting for generation.'
+  notes = 'Adds a safety circuit breaker: login or security checks stop page actions immediately; repeated upload, save, or page recovery failures preserve the checkpoint and require manual confirmation; removes automatic Edge restarts and unbounded refresh loops.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

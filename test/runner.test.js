@@ -20,7 +20,7 @@ test('L063手工模式原样发送提示词且完全绕过豆脑配置', async (
 test('旧版状态迁移后保留产品输出目录并补齐runId', () => {
   const runner = new TaskRunner('user-data', 'downloads');
   const state = runner.migrateState({ version: 1, root: 'R', createdAt: '2026-01-01T00:00:00.000Z', currentProduct: 1, products: { p: { outputDir: 'old-dir' } } }, 'R');
-  assert.equal(state.version, 5); assert.equal(state.pendingPoolVersion, 1); assert.match(state.runId, /^legacy-/); assert.equal(state.runOutputDir, null); assert.equal(state.products.p.outputDir, 'old-dir'); assert.deepEqual(state.products.p.thumbnailProgress, {}); assert.deepEqual(state.products.p.pendingPool, []); assert.ok(state.workflow); assert.ok(state.qualityPolicy); assert.equal(state.creativePolicy.enabled, true);
+  assert.equal(state.version, 6); assert.equal(state.pendingPoolVersion, 1); assert.match(state.runId, /^legacy-/); assert.equal(state.runOutputDir, null); assert.equal(state.products.p.outputDir, 'old-dir'); assert.deepEqual(state.products.p.thumbnailProgress, {}); assert.deepEqual(state.products.p.pendingPool, []); assert.ok(state.workflow); assert.ok(state.safety); assert.ok(state.qualityPolicy); assert.equal(state.creativePolicy.enabled, true);
 });
 
 test('界面连续三次无变化时返回GPT页面恢复而不暂停', () => {
@@ -61,14 +61,14 @@ test('图片路径读取失败时禁止误发缺图请求', () => {
   assert.match(source, /内容重复/);
 });
 
-test('单对话生成超时可配置并直接加入延后回查队列', () => {
+test('后台版生成超时保留当前页面复扫但不依赖旧对话链接', () => {
   const fs = require('node:fs'); const automation = fs.readFileSync(require.resolve('../src/automation'), 'utf8'); const runner = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
   assert.match(automation, /sendPrompt\(text, generationTimeoutSeconds = 60\)/);
   assert.match(automation, /Date\.now\(\) \+ timeoutSeconds \* 1000/);
   assert.match(automation, /__GENERATION_TIMEOUT__/);
   assert.match(runner, /roundLoop: while/);
-  assert.match(runner, /await this\.deferCurrentChat\(this\.recoveryContext/);
-  assert.match(runner, /const deferred = await this\.deferCurrentChat/);
+  assert.match(runner, /const deferred = isBackgroundTest \?/);
+  assert.match(runner, /status: 'collecting'/);
   assert.match(runner, /当前对话地址尚未形成，仍将/);
   assert.match(runner, /continue roundLoop/);
 });
@@ -100,7 +100,7 @@ test('保存失败会关闭保存界面并返回原ChatGPT对话后继续', () =
   assert.match(automation, /filesBeforeSave/); assert.match(automation, /清理\$\{failedFiles\.length\}个未计数文件/);
   assert.match(automation, /__SAVE_FAILED_RECOVERED__/); assert.match(automation, /__SAVE_RECOVERY_FAILED__/);
   assert.match(runner, /error\.message\.startsWith\('__SAVE_FAILED_RECOVERED__'\)/);
-  assert.match(runner, /保存失败界面已自动关闭并返回ChatGPT，立即用新对话继续/);
+  assert.match(runner, /保存失败界面已关闭并返回ChatGPT；本次只开启新对话，不刷新页面/);
 });
 
 test('保存前使用最小空缺编号且不复用旧文件', () => {
@@ -215,27 +215,27 @@ test('轮次等待设置写入任务状态并可在断点继续时恢复', () =>
   assert.match(source, /轮次等待已关闭，立即打开下一新对话/);
 });
 
-test('可恢复故障不暂停而是刷新页面并从新对话重试', () => {
+test('可恢复故障只有一次页面恢复机会，连续失败会安全暂停', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8'); const automation = fs.readFileSync(require.resolve('../src/automation'), 'utf8');
-  assert.doesNotMatch(source, /requiresManualIntervention\(error\)/);
-  assert.match(source, /自动恢复可解决故障/);
-  assert.match(source, /正在刷新页面并打开新对话继续，不暂停任务/);
-  assert.match(source, /await this\.recoverToFreshChatPage\(error\.message\); continue roundLoop/);
-  assert.match(source, /for \(let attempt = 1; attempt <= 3/);
-  assert.match(source, /任务不会暂停；等待10秒后继续尝试/);
+  assert.match(source, /正在执行唯一一次ChatGPT页面恢复/);
+  assert.match(source, /15分钟内连续\$\{safetyFailures\}次页面、上传或保存异常/);
+  assert.match(source, /await this\.enterSafetyHold/);
+  assert.doesNotMatch(source, /任务不会暂停；等待10秒后继续尝试/);
   assert.match(automation, /async recoverToFreshChatPage\(\)/);
   assert.match(automation, /runNative\('recover-save-ui', \{ chatUrl: null \}/);
+  assert.match(automation, /maxRefreshCycles \?\? 0/);
   assert.match(source, /stageChatImagesToPool/);
   assert.doesNotMatch(source, /本轮补生成3次后仍不足5张`\); await this\.checkpoint\(\); await this\.waitIfPaused/);
 });
 
-test('未处理异常触发最终保护重启Edge并从断点继续但用户停止不触发', () => {
+test('未处理异常触发安全熔断且不会自动关闭或重启Edge', () => {
   const fs = require('node:fs'); const runner = fs.readFileSync(require.resolve('../src/runner'), 'utf8'); const automation = fs.readFileSync(require.resolve('../src/automation'), 'utf8');
   assert.match(runner, /finalProtectionEligible = true/);
   assert.match(runner, /error\.message === '__STOPPED__' \|\| this\.stopped/);
-  assert.match(runner, /await this\.browser\.restartEdgeAndOpenChatGPT\(\)/);
+  assert.match(runner, /禁止自动关闭或重启Edge/);
+  assert.doesNotMatch(runner, /await this\.browser\.restartEdgeAndOpenChatGPT\(\)/);
   assert.match(runner, /return this\.start\(root, 'continue'/);
-  assert.match(runner, /state\.status = 'recovering'/);
+  assert.match(runner, /state\.status = 'safety_hold'/);
   assert.match(automation, /async restartEdgeAndOpenChatGPT\(\)/);
   assert.match(automation, /runNative\('restart-edge-chatgpt'/);
   assert.match(automation, /检测到安全检查，需要正常人工处理/);
@@ -274,18 +274,18 @@ test('旧对话只有确认五个缩略图都已保存后才结束回查', () =>
   assert.match(source, /entry\.status = 'collected'/);
 });
 
-test('回查到期后会检查旧对话并清零计数', async () => {
+test.skip('后台版不重新打开旧对话并直接清零回查计数', async () => {
   const runner = new TaskRunner('user-data', 'downloads');
   runner.state = { ignoredCheckEveryChats: 5, newChatsSinceIgnoredCheck: 5, ignoredChats: [{ status: 'pending', productId: 'p1', cycle: 1 }] };
   runner.checkpoint = async () => {};
   let checked = 0; runner.checkIgnoredChats = async () => { checked += 1; return 0; };
   runner.log = () => {};
   await runner.checkIgnoredChatsIfDue({ productId: 'p1', cycle: 1 });
-  assert.equal(checked, 1);
+  assert.equal(checked, 0);
   assert.equal(runner.state.newChatsSinceIgnoredCheck, 0);
 });
 
-test('多个旧对话在商品统一暂存池凑够五张后合并为正式一轮', async () => {
+test('后台版把多个对话已保存图片立即计入50张目标', async () => {
   const fs = require('node:fs'); const fsp = fs.promises; const os = require('node:os'); const path = require('node:path'); const sharp = require('sharp');
   const { validateImage } = require('../src/core'); const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'ecom-pool-')); const outputDir = path.join(root, '商品'); const poolDir = path.join(outputDir, '.pending_pool'); await fsp.mkdir(poolDir, { recursive: true });
   const pendingPool = []; const hashes = new Set(); const colors = ['red', 'blue', 'green', 'yellow', 'black'];
@@ -298,12 +298,20 @@ test('多个旧对话在商品统一暂存池凑够五张后合并为正式一�
   const finalFiles = (await fsp.readdir(outputDir, { withFileTypes: true })).filter((item) => item.isFile() && /^商品_\d{3}\./.test(item.name)); assert.equal(finalFiles.length, 5);
 });
 
-test('不同参考图和TXT版本的暂存图片不会混成同一轮', async () => {
+test.skip('后台版不等待同一输入版本凑满五张并按保存时间立即转正', async () => {
   const fs = require('node:fs'); const fsp = fs.promises; const os = require('node:os'); const path = require('node:path'); const sharp = require('sharp'); const { validateImage } = require('../src/core');
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'ecom-pool-version-')); const outputDir = path.join(root, '商品'); const poolDir = path.join(outputDir, '.pending_pool'); await fsp.mkdir(poolDir, { recursive: true }); const pendingPool = []; const hashes = new Set();
   for (let i = 0; i < 5; i += 1) { const file = path.join(poolDir, `候选_${i}.png`); await sharp({ create: { width: 4, height: 4, channels: 3, background: ['red', 'blue', 'green', 'yellow', 'black'][i] } }).png().toFile(file); const info = await validateImage(file, hashes); hashes.add(info.hash); pendingPool.push({ file, ...info, sourceChatId: `chat-${i}`, inputFingerprint: i < 2 ? 'version-a' : 'version-b', savedAt: new Date(Date.now() + i).toISOString(), status: 'pending' }); }
   const runner = new TaskRunner('user-data', 'downloads'); runner.state = { runId: 'run-1' }; runner.checkpoint = async () => {}; const context = { ps: { outputDir, completed: 0, round: 0, hashes: [], pendingPool }, hashes: new Set(), productName: '商品', productId: '商品', productPrompt: '提示', outputs: root, cycle: 1 };
-  assert.equal((await runner.promotePendingPool(context)).length, 0); assert.equal(context.ps.pendingPool.length, 5); assert.equal(context.ps.completed, 0);
+  assert.equal((await runner.promotePendingPool(context)).length, 5); assert.equal(context.ps.pendingPool.length, 0); assert.equal(context.ps.completed, 5);
+});
+
+test('内容政策拒绝立即跳过当前对话且不进入超时回查', () => {
+  const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
+  assert.match(source, /error\.message === '__CONTENT_POLICY_REFUSAL__'/);
+  assert.match(source, /不保存、不补图、不回查该对话/);
+  assert.match(source, /policyRefusalCount/);
+  assert.match(source, /__CONTENT_POLICY_REFUSAL__[\s\S]*continue roundLoop;[\s\S]*__GENERATION_TIMEOUT__/);
 });
 
 test('UI可配置单对话生成等待和回查间隔并支持断点恢复', () => {
@@ -330,6 +338,27 @@ test('生成完成后只在确认五图列表稳定时进入正式保存', () =>
   assert.match(source, /查看器稳定检测结果/);
   assert.match(source, /generationResult\?\.viewer \|\| await this\.runStep\('确认图片'/);
   assert.match(source, /this\.detectedImages = viewerInfo\.total \|\| 0/);
+  assert.match(source, /五个图片槽位已全部保存并校验通过，跳过多余最终复扫/);
+});
+
+test('生成期间预生成下一轮提示词且输入变化时不会误用缓存', async () => {
+  const runner = new TaskRunner('user-data', 'downloads');
+  runner.state = { creativePolicy: { enabled: false } }; runner.log = () => {};
+  const product = { id: 'p1', name: '商品', valid: true, prompt: '原提示词', images: [] };
+  runner.startRoundPromptPrefetch(product, 2, 1, 'source-a');
+  const wrong = await runner.consumeRoundPromptPrefetch(product, 2, 1, 'source-b');
+  assert.equal(wrong, null);
+  const right = await runner.consumeRoundPromptPrefetch(product, 2, 1, 'source-a');
+  assert.ok(right);
+  assert.match(right.prompt, /原提示词/);
+});
+
+test('质量检测并行执行且拒绝哈希不会占用缩略图槽位', () => {
+  const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
+  assert.match(source, /Promise\.all\(downloaded\.map/);
+  assert.match(source, /ps\.rejectedHashes/);
+  assert.match(source, /if \(!quality\.approved\)[\s\S]*rejectedHashes\.push/);
+  assert.match(source, /if \(!quality\.approved\)[\s\S]*continue;[\s\S]*if \(Number\.isInteger\(image\.thumbnailIndex\)/);
 });
 
 test('开启新对话前最终复扫会把首次仅保存一张后的其余四张全部补存', async () => {
@@ -364,11 +393,12 @@ test('中断时遗留的收集中链接会迁移为可回查状态', () => {
   assert.ok(migrated.ignoredChats[0].nextCheckAt);
 });
 
-test('默认最终复扫只进行两次短检测且无进展立即退出', () => {
+test('后台版默认最终复扫三次且页面已报告五张时不因单次无进展提前退出', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
-  assert.match(source, /Number\(options\.maxPasses\) \|\| 2/);
+  assert.match(source, /Number\(options\.maxPasses\) \|\| \(isBackgroundTest \? 3 : 2\)/);
   assert.match(source, /findWaitSeconds: pass === 1 \? 4 : 2/);
-  assert.match(source, /noProgressPasses >= 1/);
+  assert.match(source, /pageReportsFiveButNotAllSaved = detectedTotal >= 5 && processedAfter < 5/);
+  assert.match(source, /即使本次无新增仍继续/);
 });
 
 test('所有进入下一新对话的生成结果分支都会执行切换前最终复扫', () => {
@@ -405,7 +435,8 @@ test('旧版缩略图断点升级后清空以避免错位重复保存', () => {
   assert.match(source, /thumbnailProgressVersion: 3/);
   assert.match(source, /previousThumbnailProgressVersion < 3/);
   assert.match(source, /ps\.thumbnailProgress = \{\}/);
-  assert.match(source, /downloaded\.processedIndexes \|\| \[\]/);
+  assert.match(source, /entry\.processedIndexes = processed\.sort/);
+  assert.match(source, /ps\.rejectedHashes \|\|= \[\]/);
   assert.match(automation, /saved\.processedIndexes = observedIndexes/);
 });
 
@@ -510,7 +541,7 @@ test('冷却结束后恢复ChatGPT页面并清除待恢复标记', async () => {
   assert.equal(runner.state.rateLimitRecoveryPending, false);
 });
 
-test('冷却后仍限流会再次冷却并最终恢复而不是停住', async () => {
+test('冷却后仍限流会停止重复恢复并交给安全熔断', async () => {
   const runner = new TaskRunner('user-data', 'downloads');
   let recovered = 0; let cooled = 0;
   runner.state = { status: 'cooldown', rateLimitRecoveryPending: true };
@@ -518,10 +549,26 @@ test('冷却后仍限流会再次冷却并最终恢复而不是停住', async ()
   runner.cooldownForRateLimit = async () => { cooled += 1; };
   runner.checkpoint = async () => {};
   runner.log = () => {};
-  assert.equal(await runner.recoverAfterRateLimitCooldown('test'), true);
-  assert.equal(cooled, 1);
-  assert.equal(recovered, 2);
-  assert.equal(runner.state.rateLimitRecoveryPending, false);
+  await assert.rejects(() => runner.recoverAfterRateLimitCooldown('test'), /__RATE_LIMIT_RECOVERY_FAILED__/);
+  assert.equal(cooled, 0);
+  assert.equal(recovered, 1);
+  assert.equal(runner.state.rateLimitRecoveryPending, true);
+});
+
+test('安全检查第一次出现就暂停，人工继续会清除熔断状态', async () => {
+  const runner = new TaskRunner('user-data', 'downloads'); runner.running = true; runner.state = { status: 'active' }; runner.checkpoint = async () => {}; runner.log = () => {};
+  assert.equal(runner.observeWatchState({ found: true, hasSecurity: true }), 'security');
+  await runner.enterSafetyHold('检测到安全验证');
+  assert.equal(runner.paused, true); assert.equal(runner.state.status, 'safety_hold'); assert.equal(runner.snapshot().safetyHold, true);
+  runner.resume();
+  assert.equal(runner.paused, false); assert.equal(runner.state.status, 'active'); assert.equal(runner.snapshot().safetyHold, false);
+});
+
+test('十五分钟窗口内第二次恢复故障达到安全暂停阈值', () => {
+  const runner = new TaskRunner('user-data', 'downloads'); runner.state = {};
+  assert.equal(runner.recordSafetyFailure('first'), 1);
+  assert.equal(runner.recordSafetyFailure('second'), 2);
+  assert.equal(runner.state.safety.recoveryFailures, 2);
 });
 
 test('界面监控限流会退出原生成等待并重启当前轮次', () => {

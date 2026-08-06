@@ -25,3 +25,15 @@ test('关闭自适应时仍严格服从用户上下限', () => {
   assert.equal(scheduler.nextDelaySeconds(20, 60, () => 0), 20);
   assert.equal(scheduler.nextDelaySeconds(20, 60, () => 0.999), 60);
 });
+
+test('有实际产出的部分结果不再被统计为连续失败', () => {
+  const scheduler = new AdaptiveScheduler({ enabled: true });
+  scheduler.record({ outcome: 'failure', images: 0 });
+  scheduler.record({ outcome: 'partial', generationMs: 120000, images: 2 });
+  const state = scheduler.snapshot();
+  assert.equal(state.successCount, 1);
+  assert.equal(state.partialCount, 1);
+  assert.equal(state.consecutiveFailures, 0);
+  assert.equal(scheduler.recentFailureRate(), 0.5);
+  assert.ok(scheduler.nextDelaySeconds(20, 60, () => 0.5) < 50);
+});

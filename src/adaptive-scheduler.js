@@ -6,11 +6,12 @@ function finite(value, fallback = 0) { const numeric = Number(value); return Num
 class AdaptiveScheduler {
   constructor(state = {}) {
     this.state = {
-      version: 1,
+      version: 2,
       enabled: state.enabled !== false,
       samples: Array.isArray(state.samples) ? state.samples.slice(-DEFAULT_SAMPLE_LIMIT) : [],
       ewmaGenerationMs: finite(state.ewmaGenerationMs, 0),
       successCount: Math.max(0, finite(state.successCount, 0)),
+      partialCount: Math.max(0, finite(state.partialCount, 0)),
       failureCount: Math.max(0, finite(state.failureCount, 0)),
       rateLimitCount: Math.max(0, finite(state.rateLimitCount, 0)),
       consecutiveSuccesses: Math.max(0, finite(state.consecutiveSuccesses, 0)),
@@ -23,14 +24,17 @@ class AdaptiveScheduler {
   snapshot() { return { ...this.state, samples: [...this.state.samples] }; }
 
   record({ outcome, generationMs = 0, images = 0, qualityRejected = 0, rateLimited = false } = {}) {
-    const success = outcome === 'success' && images >= 5;
+    const imageCount = Math.max(0, finite(images, 0));
+    const success = outcome === 'success' && imageCount >= 5;
+    const productive = !rateLimited && imageCount > 0 && (outcome === 'success' || outcome === 'partial');
     const duration = Math.max(0, finite(generationMs, 0));
-    const sample = { at: new Date().toISOString(), outcome: rateLimited ? 'rate-limit' : (outcome || 'failure'), generationMs: duration, images: Math.max(0, finite(images, 0)), qualityRejected: Math.max(0, finite(qualityRejected, 0)) };
+    const sample = { at: new Date().toISOString(), outcome: rateLimited ? 'rate-limit' : (outcome || 'failure'), generationMs: duration, images: imageCount, qualityRejected: Math.max(0, finite(qualityRejected, 0)) };
     this.state.samples.push(sample);
     this.state.samples = this.state.samples.slice(-DEFAULT_SAMPLE_LIMIT);
     if (duration > 0 && images > 0) this.state.ewmaGenerationMs = this.state.ewmaGenerationMs > 0 ? Math.round(this.state.ewmaGenerationMs * 0.72 + duration * 0.28) : Math.round(duration);
-    if (success) {
+    if (productive) {
       this.state.successCount += 1; this.state.consecutiveSuccesses += 1; this.state.consecutiveFailures = 0;
+      if (!success) this.state.partialCount += 1;
     } else {
       this.state.failureCount += 1; this.state.consecutiveFailures += 1; this.state.consecutiveSuccesses = 0;
     }
@@ -42,7 +46,7 @@ class AdaptiveScheduler {
   recentFailureRate(windowSize = 12) {
     const samples = this.state.samples.slice(-Math.max(1, windowSize));
     if (!samples.length) return 0;
-    return samples.filter((item) => item.outcome !== 'success').length / samples.length;
+    return samples.filter((item) => item.outcome === 'failure' || item.outcome === 'timeout' || item.outcome === 'rate-limit' || Number(item.images || 0) <= 0).length / samples.length;
   }
 
   generationTimeoutSeconds(configuredSeconds) {

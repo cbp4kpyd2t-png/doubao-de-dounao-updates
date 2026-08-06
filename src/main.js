@@ -6,6 +6,7 @@ const { TaskRunner } = require('./runner');
 const { cleanupHiddenLegacyInstances } = require('./process-guard');
 const { GlobalTaskLock } = require('./task-lock');
 const { UpdateManager } = require('./update-manager');
+const edition = require('./edition');
 
 const ADMIN_ACCOUNT_HASH = Buffer.from('883b26d58a3f49a0f48c78639d93d321b71ebd0fe8cf5b44c6f75f232fac2de3', 'hex');
 const ADMIN_PASSWORD_HASH = Buffer.from('6737486ddfe28e347e30504384523a88616c618ece8c87d431f99263480b311c', 'hex');
@@ -23,15 +24,15 @@ function rememberInstallationAuthorization() { const id = installationId(); fs.m
 function requireAdmin() { if (!adminAuthenticated) throw new Error('请先完成管理员账号登录'); }
 function createWindow() {
   adminAuthenticated = isInstallationAuthorized(); failedLogins = 0; lockedUntil = 0;
-  win = new BrowserWindow({ width: 1040, height: 760, minWidth: 820, minHeight: 620, title: '豆包的豆脑', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  win = new BrowserWindow({ width: 1040, height: 760, minWidth: 820, minHeight: 620, title: edition.title, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
   runner = new TaskRunner(app.getPath('userData'), app.getPath('downloads'));
   globalTaskLock = new GlobalTaskLock(app.getPath('userData'));
-  updateManager = new UpdateManager({ userDataDir: app.getPath('userData'), currentVersion: app.getVersion(), installDir: path.dirname(process.execPath), executablePath: process.execPath, packaged: app.isPackaged, onStatus: (data) => win?.webContents.send('update:status', data) });
+  updateManager = edition.isBackgroundTest ? null : new UpdateManager({ userDataDir: app.getPath('userData'), currentVersion: app.getVersion(), installDir: path.dirname(process.execPath), executablePath: process.execPath, packaged: app.isPackaged, onStatus: (data) => win?.webContents.send('update:status', data) });
   runner.on('status', (data) => win?.webContents.send('task:status', data));
   runner.on('log', (line) => win?.webContents.send('task:log', line));
   runner.on('alert', ({ title, message }) => dialog.showMessageBox(win, { type: 'warning', title, message, buttons: ['知道了'], defaultId: 0 }));
-  win.webContents.once('did-finish-load', () => setTimeout(async () => { try { const settings = await updateManager.getSettings(); const sourceExists = /^https:\/\//i.test(settings.source || '') || fs.existsSync(settings.source || ''); if (settings.autoCheck && sourceExists && !activeTaskPromise) await updateManager.check(); } catch (error) { win?.webContents.send('update:status', { state: 'error', message: `自动检查更新失败：${error.message}` }); } }, 5000));
+  if (updateManager) win.webContents.once('did-finish-load', () => setTimeout(async () => { try { const settings = await updateManager.getSettings(); const sourceExists = /^https:\/\//i.test(settings.source || '') || fs.existsSync(settings.source || ''); if (settings.autoCheck && sourceExists && !activeTaskPromise) await updateManager.check(); } catch (error) { win?.webContents.send('update:status', { state: 'error', message: `自动检查更新失败：${error.message}` }); } }, 5000));
 }
 
 function focusMainWindow() { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
@@ -89,14 +90,16 @@ ipcMain.handle('task:login', async (_e, root) => {
   if (runner.browser?.connected) return { loggedIn: await runner.browser.isLoggedIn() };
   const { browser, loggedIn } = await runner.loginCheck(root); runner.browser = browser; return { loggedIn };
 });
-ipcMain.handle('folder:openOutput', async (_e, root) => { requireAdmin(); return shell.openPath(path.join(root, 'outputs')); });
+ipcMain.handle('folder:openOutput', async (_e, root) => { requireAdmin(); return shell.openPath(path.join(root, edition.outputFolderName)); });
 ipcMain.handle('app:version', () => app.getVersion());
-ipcMain.handle('update:getSettings', async () => { requireAdmin(); return updateManager.getSettings(); });
+ipcMain.handle('app:edition', () => ({ id: edition.id, title: edition.title, backgroundTest: edition.isBackgroundTest }));
+ipcMain.handle('update:getSettings', async () => { requireAdmin(); return updateManager ? updateManager.getSettings() : { source: '', autoCheck: false, disabled: true }; });
 ipcMain.handle('update:chooseSource', async () => { requireAdmin(); const result = await dialog.showOpenDialog(win, { title: '选择更新清单 update-manifest.json', properties: ['openFile'], filters: [{ name: '更新清单', extensions: ['json'] }] }); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('update:saveSettings', async (_e, settings) => { requireAdmin(); return updateManager.saveSettings(settings); });
-ipcMain.handle('update:check', async (_e, source) => { requireAdmin(); if (activeTaskPromise) throw new Error('任务运行中暂不检查更新，避免影响生成效率'); return updateManager.check(source); });
+ipcMain.handle('update:saveSettings', async (_e, settings) => { requireAdmin(); if (!updateManager) return { source: '', autoCheck: false, disabled: true }; return updateManager.saveSettings(settings); });
+ipcMain.handle('update:check', async (_e, source) => { requireAdmin(); if (!updateManager) throw new Error('后台测试版不连接正式版更新通道'); if (activeTaskPromise) throw new Error('任务运行中暂不检查更新，避免影响生成效率'); return updateManager.check(source); });
 ipcMain.handle('update:install', async () => {
   requireAdmin();
+  if (!updateManager) throw new Error('后台测试版不连接正式版更新通道');
   if (activeTaskPromise) throw new Error('请先停止当前任务再安装更新');
   await updateManager.install();
   win?.hide();

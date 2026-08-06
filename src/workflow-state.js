@@ -1,16 +1,17 @@
 const STEP_POLICIES = Object.freeze({
   '扫描产品': { timeoutMs: 30000, maxAttempts: 2, recovery: '重新扫描目录' },
   '检查旧对话': { timeoutMs: 120000, maxAttempts: 1, recovery: '延后回查并开启新对话' },
-  '打开新对话': { timeoutMs: 90000, maxAttempts: 3, recovery: '恢复ChatGPT首页' },
-  '上传参考图': { timeoutMs: 240000, maxAttempts: 2, recovery: '清空附件并重新上传' },
-  '发送提示词': { timeoutMs: 120000, maxAttempts: 3, recovery: '验证附件后重新发送' },
+  '打开新对话': { timeoutMs: 90000, maxAttempts: 1, recovery: '进入安全熔断并等待人工确认' },
+  '上传参考图': { timeoutMs: 240000, maxAttempts: 1, recovery: '清空附件后仅重传一次，失败则安全暂停' },
+  '发送提示词': { timeoutMs: 120000, maxAttempts: 1, recovery: '验证附件，失败则安全暂停' },
   '等待生成': { timeoutMs: 900000, maxAttempts: 1, recovery: '记录旧对话并开启新对话' },
   '确认图片': { timeoutMs: 120000, maxAttempts: 2, recovery: '延后回查当前对话' },
+  '最终复扫': { timeoutMs: 360000, maxAttempts: 1, recovery: '保留缩略图断点并开启下一对话' },
   '保存图片': { timeoutMs: 360000, maxAttempts: 2, recovery: '关闭保存界面并返回对话' },
   '质量检测': { timeoutMs: 120000, maxAttempts: 1, recovery: '拒绝无效候选并继续' },
   '轮次等待': { timeoutMs: 900000, maxAttempts: 1, recovery: '结束等待并继续' },
   '限流冷却': { timeoutMs: 7200000, maxAttempts: 1, recovery: '冷却后恢复页面' },
-  '页面恢复': { timeoutMs: 300000, maxAttempts: 3, recovery: '重启Edge并从断点继续' },
+  '页面恢复': { timeoutMs: 180000, maxAttempts: 1, recovery: '仅恢复一次，失败则安全暂停' },
 });
 
 function policyFor(name, overrides = {}) { return { timeoutMs: 120000, maxAttempts: 1, recovery: '恢复页面并从断点继续', ...(STEP_POLICIES[name] || {}), ...overrides }; }

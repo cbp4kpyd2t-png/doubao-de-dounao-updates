@@ -3,7 +3,8 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
-const { ChatGPTAutomation } = require('./automation');
+const { isBackgroundTest, outputFolderName } = require('./edition');
+const { ChatGPTAutomation } = isBackgroundTest ? require('./background-automation') : require('./automation');
 const { scanProductDirectory, scanProducts, allocateOutputDir, allocateRunLayout, validateImage, extensionFor, appendIndex, atomicWriteJson, randomDelayMs, safeName } = require('./core');
 const { AdaptiveScheduler } = require('./adaptive-scheduler');
 const { transitionWorkflow, completeWorkflow, failWorkflow, isWorkflowOverdue, policyFor } = require('./workflow-state');
@@ -25,16 +26,37 @@ async function buildInputFingerprint(images, prompt) {
 }
 
 class TaskRunner extends EventEmitter {
-  constructor(userDataDir, downloadsDir) { super(); this.userDataDir = userDataDir; this.downloadsDir = downloadsDir; this.running = false; this.paused = false; this.stopped = false; this.nativeSaveInFlight = false; this.skipCurrentProduct = false; this.currentPhase = '待处理'; this.detectedImages = 0; this.watchLastSignature = null; this.watchSameCount = 0; this.watchInFlight = false; this.watchRecoveryCount = 0; this.recoveryContext = null; this.recoveryActive = false; this.rateLimitCooling = false; this.rateLimitRestartRequested = false; this.rateLimitRecoveryActive = false; this.workflowRecoveryRequested = false; this.scheduler = null; }
-  snapshot(extra = {}) { const scheduler = this.scheduler?.snapshot(); return { running: this.running, paused: this.paused, stopped: this.stopped, detectedImages: this.detectedImages, workflowStep: this.state?.workflow?.current?.name || null, adaptiveDelaySeconds: scheduler?.lastDelaySeconds || 0, adaptiveGenerationSeconds: this.state?.activeGenerationTimeoutSeconds || this.state?.generationTimeoutSeconds || 0, recentFailureRate: this.scheduler?.recentFailureRate() || 0, qualityRejected: this.state?.qualityStats?.rejected || 0, qualityWarnings: this.state?.qualityStats?.warnings || 0, ...extra }; }
+  constructor(userDataDir, downloadsDir) { super(); this.userDataDir = userDataDir; this.downloadsDir = downloadsDir; this.running = false; this.paused = false; this.stopped = false; this.nativeSaveInFlight = false; this.skipCurrentProduct = false; this.currentPhase = '待处理'; this.detectedImages = 0; this.watchLastSignature = null; this.watchSameCount = 0; this.watchInFlight = false; this.watchRecoveryCount = 0; this.recoveryContext = null; this.recoveryActive = false; this.rateLimitCooling = false; this.rateLimitRestartRequested = false; this.rateLimitRecoveryActive = false; this.workflowRecoveryRequested = false; this.scheduler = null; this.prefetchedRoundPrompt = null; }
+  snapshot(extra = {}) { const scheduler = this.scheduler?.snapshot(); const safety = this.state?.safety || {}; return { running: this.running, paused: this.paused, stopped: this.stopped, safetyHold: safety.status === 'hold', safetyReason: safety.reason || null, safetyHoldUntil: safety.holdUntil || null, detectedImages: this.detectedImages, workflowStep: this.state?.workflow?.current?.name || null, adaptiveDelaySeconds: scheduler?.lastDelaySeconds || 0, adaptiveGenerationSeconds: this.state?.activeGenerationTimeoutSeconds || this.state?.generationTimeoutSeconds || 0, recentFailureRate: this.scheduler?.recentFailureRate() || 0, qualityRejected: this.state?.qualityStats?.rejected || 0, qualityWarnings: this.state?.qualityStats?.warnings || 0, ...extra }; }
   emitStatus(extra = {}) { if (extra.phase && extra.phase !== this.currentPhase) { this.currentPhase = extra.phase; this.resetWatchdogSamples(); } this.emit('status', this.snapshot({ currentCycle: this.state?.currentCycle || 0, totalCycles: this.state?.totalCycles || 1, ...extra })); }
   log(message) { const line = `[${new Date().toLocaleString('zh-CN')}] ${message}`; this.emit('log', line); if (this.logFile) fs.appendFileSync(this.logFile, `${line}\r\n`, 'utf8'); }
   pause(reason = '用户暂停', showAlert = reason !== '用户暂停') { this.paused = true; if (this.state) this.state.status = 'paused'; this.checkpoint().catch(() => {}); this.log(reason); this.emitStatus({ phase: '已暂停', message: reason }); if (showAlert) this.emit('alert', { title: '任务需要处理', message: reason }); }
-  resume() { if (!this.running) return; this.paused = false; this.resetWatchdogSamples(); if (this.state) this.state.status = 'active'; this.checkpoint().catch(() => {}); this.log('任务继续'); this.emitStatus({ phase: '继续中' }); }
+  resume() { if (!this.running) return; const safety = this.ensureSafetyState(); if (safety.status === 'hold') { this.log(`用户已确认处理安全暂停：${safety.reason || '页面异常'}`); safety.status = 'ready'; safety.reason = null; safety.heldAt = null; safety.holdUntil = null; safety.manualResumeRequired = false; safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; } this.paused = false; this.workflowRecoveryRequested = false; this.resetWatchdogSamples(); if (this.state) this.state.status = 'active'; this.checkpoint().catch(() => {}); this.log('任务继续'); this.emitStatus({ phase: '继续中' }); }
   stop() { this.stopped = true; this.paused = false; if (this.state) this.state.status = 'stopped'; this.checkpoint().catch(() => {}); this.log('任务将在当前安全步骤后停止'); }
   async shutdown() { this.stopWatchdog(); this.stop(); await this.checkpoint().catch(() => {}); await this.browser?.close(); this.browser = null; }
   async checkpoint() { if (this.stateFile && this.state) await atomicWriteJson(this.stateFile, this.state); }
   async waitIfPaused() { while (this.paused && !this.stopped) await sleep(500); if (this.stopped) throw new Error('__STOPPED__'); }
+  ensureSafetyState() {
+    if (!this.state) return { status: 'ready', recoveryFailures: 0 };
+    this.state.safety ||= { version: 1, status: 'ready', recoveryFailures: 0, failureWindowStartedAt: null, reason: null, heldAt: null, holdUntil: null, manualResumeRequired: false };
+    return this.state.safety;
+  }
+  isSecurityOrLoginError(error) { return /__LOGIN_REQUIRED__|__SECURITY|验证码|安全检查|安全验证|登录入口|退出登录|账号.*(?:停用|封禁|禁用)|account.*(?:deactivat|suspend|block)|verify you are human/i.test(String(error?.message || error || '')); }
+  recordSafetyFailure(reason) {
+    const safety = this.ensureSafetyState(); const now = Date.now(); const started = Date.parse(safety.failureWindowStartedAt || '');
+    if (!Number.isFinite(started) || now - started > 15 * 60000) { safety.failureWindowStartedAt = new Date(now).toISOString(); safety.recoveryFailures = 0; }
+    safety.recoveryFailures = Math.max(0, Number(safety.recoveryFailures) || 0) + 1; safety.lastFailureAt = new Date(now).toISOString(); safety.lastFailure = String(reason || '页面异常');
+    return safety.recoveryFailures;
+  }
+  resetSafetyFailures() { const safety = this.ensureSafetyState(); safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; safety.lastFailure = null; }
+  async enterSafetyHold(reason, { recommendedMinutes = 30 } = {}) {
+    const safety = this.ensureSafetyState(); const message = String(reason || '检测到需要人工处理的页面异常');
+    if (safety.status === 'hold' && this.paused) return;
+    safety.status = 'hold'; safety.reason = message; safety.heldAt = new Date().toISOString(); safety.holdUntil = new Date(Date.now() + Math.max(1, recommendedMinutes) * 60000).toISOString(); safety.manualResumeRequired = true;
+    this.paused = true; if (this.state) this.state.status = 'safety_hold'; await this.checkpoint().catch(() => {});
+    this.log(`安全熔断已启动：已停止所有ChatGPT页面操作并保存断点。${message}。建议至少等待${recommendedMinutes}分钟，确认账号和页面正常后再点击“继续当前任务”`);
+    this.emitStatus({ phase: '安全暂停', message }); this.emit('alert', { title: '安全暂停', message: `${message}\n\n软件已停止所有页面操作并保存断点。请人工确认账号和页面正常后，再点击“继续当前任务”。` });
+  }
   ensureScheduler() { this.scheduler ||= new AdaptiveScheduler(this.state?.scheduler || {}); if (this.state) this.state.scheduler = this.scheduler.snapshot(); return this.scheduler; }
   schedulerCheckpoint() { if (this.state && this.scheduler) this.state.scheduler = this.scheduler.snapshot(); return this.checkpoint(); }
   stepContext(details = null) { const context = this.recoveryContext || {}; return { productId: context.productId, cycle: context.cycle || this.state?.currentCycle, round: context.round, details }; }
@@ -57,23 +79,16 @@ class TaskRunner extends EventEmitter {
     throw lastError;
   }
   async recoverToFreshChatPage(reason) {
-    let lastError = null;
-    for (let attempt = 1; attempt <= 3 && !this.stopped; attempt += 1) {
-      try {
-        this.log(`正在恢复ChatGPT页面（第${attempt}/3次）：关闭残留窗口、返回首页并刷新；原因：${reason}`);
-        await this.browser.recoverToFreshChatPage();
-        this.log('ChatGPT页面已恢复，下一循环将开启全新对话继续任务');
-        return true;
-      } catch (error) {
-        lastError = error;
-        if (this.isRateLimited(error)) { await this.cooldownForRateLimit(error.message); return this.recoverAfterRateLimitCooldown('页面恢复过程中触发限流'); }
-        this.log(`第${attempt}/3次恢复ChatGPT页面未成功：${error.message}`);
-        if (attempt < 3) await sleep(3000);
-      }
+    try {
+      this.log(`正在执行唯一一次ChatGPT页面恢复：关闭残留窗口、返回首页并刷新；原因：${reason}`);
+      await this.browser.recoverToFreshChatPage();
+      this.log('ChatGPT页面已恢复，下一循环将开启全新对话继续任务');
+      return true;
+    } catch (error) {
+      if (this.isRateLimited(error)) { await this.cooldownForRateLimit(error.message); return this.recoverAfterRateLimitCooldown('页面恢复过程中触发限流'); }
+      this.log(`唯一一次ChatGPT页面恢复未成功：${error.message}`);
     }
     if (this.stopped) throw new Error('__STOPPED__');
-    this.log(`本轮恢复仍未成功，但任务不会暂停；等待10秒后继续尝试返回ChatGPT并开启新对话：${lastError?.message || reason}`);
-    await sleep(10000);
     return false;
   }
   isRateLimited(error) { return String(error?.message || error || '').startsWith('__RATE_LIMITED__'); }
@@ -118,31 +133,19 @@ class TaskRunner extends EventEmitter {
     if (this.rateLimitRecoveryActive) { while (this.rateLimitRecoveryActive && !this.stopped) await sleep(500); return !this.stopped; }
     this.rateLimitRecoveryActive = true;
     try {
-      let lastError = null;
-      for (let attempt = 1; attempt <= 3 && !this.stopped; attempt += 1) {
-        try {
-          if (this.state) this.state.status = 'recovering';
-          this.emitStatus({ phase: '冷却后恢复中', message: '正在恢复ChatGPT页面并重新进入任务' });
-          this.log(`限流冷却已结束，正在恢复ChatGPT页面并准备开启新对话（第${attempt}/3次）：${reason}`);
-          await this.browser.recoverToFreshChatPage();
-          if (this.state) { this.state.status = 'active'; this.state.rateLimitUntil = null; this.state.rateLimitRecoveryPending = false; }
-          await this.checkpoint().catch(() => {});
-          this.log('ChatGPT页面已在限流冷却后恢复，任务将从当前断点开启新对话继续');
-          return true;
-        } catch (error) {
-          lastError = error;
-          if (this.isRateLimited(error)) {
-            this.log('冷却结束后页面仍显示请求过于频繁，将进入下一档冷却，不会停住任务');
-            await this.cooldownForRateLimit(error.message);
-            attempt = 0;
-            continue;
-          }
-          this.log(`限流冷却后的页面恢复第${attempt}/3次失败：${error.message}`);
-          if (attempt < 3) await sleep(3000);
-        }
+      try {
+        if (this.state) this.state.status = 'recovering';
+        this.emitStatus({ phase: '冷却后恢复中', message: '正在进行唯一一次页面恢复检查' });
+        this.log(`限流冷却已结束，正在进行唯一一次ChatGPT页面恢复：${reason}`);
+        await this.browser.recoverToFreshChatPage();
+        if (this.state) { this.state.status = 'active'; this.state.rateLimitUntil = null; this.state.rateLimitRecoveryPending = false; }
+        await this.checkpoint().catch(() => {});
+        this.log('ChatGPT页面已在限流冷却后恢复，任务将从当前断点开启新对话继续');
+        return true;
+      } catch (error) {
+        throw new Error(`__RATE_LIMIT_RECOVERY_FAILED__:冷却后页面仍不可安全使用：${error.message}`);
       }
       if (this.stopped) throw new Error('__STOPPED__');
-      throw new Error(`__RATE_LIMIT_RECOVERY_FAILED__:${lastError?.message || reason}`);
     } finally { this.rateLimitRecoveryActive = false; this.resetWatchdogSamples(); }
   }
   async refreshProductInputs(context) {
@@ -160,7 +163,7 @@ class TaskRunner extends EventEmitter {
     context.creativeMode = prepared.creativeMode;
     return context;
   }
-  async prepareRoundPrompt(product, round, cycle) {
+  async prepareRoundPrompt(product, round, cycle, options = {}) {
     const creativePolicy = this.state?.creativePolicy || { enabled: true, globalRequirements: '' };
     if (product.manualPromptMode) {
       if (!String(product.manualPrompt || '').trim()) throw new Error(`商品“${product.name}”缺少手工提示词；请创建“手工提示词.txt”或填写“创意要求.txt”`);
@@ -174,7 +177,7 @@ class TaskRunner extends EventEmitter {
     let aiVocabularyUsed = false;
     const taggedVocabularyUsed = !!bundle.taggedVocabulary;
     if (taggedVocabularyUsed) this.log(`已加载极简联动词库：${product.name}；以后只需编辑“豆脑配置/极简词库.txt”即可增加词条`);
-    if (!taggedVocabularyUsed && creativePolicy.aiEnabled !== false) {
+    if (!taggedVocabularyUsed && creativePolicy.aiEnabled !== false && options.skipAi !== true) {
       try {
         const ai = await ensureAiCreativeBank({
           browser: this.browser,
@@ -207,8 +210,27 @@ class TaskRunner extends EventEmitter {
     }
     const prompt = buildRoundPrompt(bundle.facts, bundle.plan, round, creativePolicy.globalRequirements || '', product.imageSelection);
     const vocabularyLabel = taggedVocabularyUsed ? '极简联动词库' : (aiVocabularyUsed ? 'AI审稿词库' : '本地安全词库');
-    this.log(`差异化创意已就绪：${product.name} 第${round}轮，商品事实${bundle.sourceChanged ? '已重新提取' : '沿用已验证版本'}，${vocabularyLabel}，创意引擎v${CREATIVE_ENGINE_VERSION}`);
+    if (options.silent !== true) this.log(`差异化创意已就绪：${product.name} 第${round}轮，商品事实${bundle.sourceChanged ? '已重新提取' : '沿用已验证版本'}，${vocabularyLabel}，创意引擎v${CREATIVE_ENGINE_VERSION}`);
     return { sourcePrompt: prompt, prompt, creativeFingerprint: bundle.plan.vocabularyFingerprint || bundle.fingerprint, creativeMode: true };
+  }
+  prefetchKey(product, round, cycle, sourceFingerprint) { return `${product.id}|${cycle}|${round}|${sourceFingerprint}`; }
+  startRoundPromptPrefetch(product, round, cycle, sourceFingerprint) {
+    if (!product?.valid || !sourceFingerprint || this.stopped) return;
+    const key = this.prefetchKey(product, round, cycle, sourceFingerprint);
+    if (this.prefetchedRoundPrompt?.key === key) return;
+    const promise = this.prepareRoundPrompt(product, round, cycle, { skipAi: true, silent: true })
+      .then((prepared) => ({ prepared, error: null }))
+      .catch((error) => ({ prepared: null, error }));
+    this.prefetchedRoundPrompt = { key, promise };
+  }
+  async consumeRoundPromptPrefetch(product, round, cycle, sourceFingerprint) {
+    const key = this.prefetchKey(product, round, cycle, sourceFingerprint);
+    if (this.prefetchedRoundPrompt?.key !== key) return null;
+    const cached = this.prefetchedRoundPrompt; this.prefetchedRoundPrompt = null;
+    const result = await cached.promise;
+    if (result.error) { this.log(`下一轮提示词预生成未采用，将在正式步骤重新生成：${result.error.message}`); return null; }
+    this.log(`已直接使用生成期间预备的第${round}轮提示词，跳过本轮现场等待`);
+    return result.prepared;
   }
   async checkIgnoredChats(context) {
     const ignoredChats = this.state.ignoredChats ||= []; let collectedImages = 0;
@@ -223,11 +245,11 @@ class TaskRunner extends EventEmitter {
         entry.lastCheckedAt = new Date().toISOString();
         if (oldState.hasRateLimit) throw new Error('__RATE_LIMITED__:旧对话回查时出现请求过于频繁');
         if (oldState.hasStop) { entry.lastError = '图片仍在生成'; entry.nextCheckAt = new Date(Date.now() + 2 * 60000).toISOString(); this.log(`旧对话仍在生成，至少2分钟后再查：${entry.url}`); await this.checkpoint(); continue; }
-        const viewerInfo = await this.browser.getViewerImageCount({ targetTotal: 5, maxWaitSeconds: 15 });
+        const viewerInfo = await this.browser.getViewerImageCount({ targetTotal: isBackgroundTest ? 1 : 5, maxWaitSeconds: 15 });
         entry.detectedTotal = viewerInfo.total || 0;
         if (!viewerInfo.found || entry.detectedTotal <= 0) { entry.lastError = '未检测到图片'; entry.nextCheckAt = new Date(Date.now() + 5 * 60000).toISOString(); this.log(`旧对话尚无可收集图片，至少5分钟后再查：${entry.url}`); await this.checkpoint(); continue; }
         const added = await this.stageChatImagesToPool(context, entry, entry.detectedTotal); collectedImages += added.length;
-        if (viewerInfo.five && (entry.processedIndexes || []).length >= 5) { entry.status = 'collected'; entry.collectedAt = new Date().toISOString(); }
+        if ((isBackgroundTest && (entry.processedIndexes || []).length >= entry.detectedTotal) || (viewerInfo.five && (entry.processedIndexes || []).length >= 5)) { entry.status = 'collected'; entry.collectedAt = new Date().toISOString(); }
         else entry.nextCheckAt = new Date(Date.now() + 5 * 60000).toISOString();
         const promoted = await this.promotePendingPool(context);
         this.log(`旧对话本次新增收集${added.length}张，统一暂存池转正${promoted.length}张：${entry.url}`);
@@ -249,6 +271,7 @@ class TaskRunner extends EventEmitter {
   }
 
   async checkIgnoredChatsIfDue(context) {
+    if (isBackgroundTest) { this.state.newChatsSinceIgnoredCheck = 0; return 0; }
     const checkEvery = this.state.ignoredCheckEveryChats || 10;
     if ((this.state.newChatsSinceIgnoredCheck || 0) < checkEvery) return 0;
     const hasPending = (this.state.ignoredChats || []).some((item) => item.status === 'pending' && item.productId === context.productId && (!item.cycle || item.cycle === context.cycle));
@@ -277,12 +300,14 @@ class TaskRunner extends EventEmitter {
 
   async finalRescanCurrentChatBeforeNextChat(context, entry = null, options = {}) {
     if (!context || !this.browser) return { entry, detectedTotal: 0, added: [], promoted: [] };
+    transitionWorkflow(this.state, '最终复扫', { ...this.stepContext('逐个核对5个缩略图') }); await this.checkpoint();
     const ignoredChats = this.state.ignoredChats ||= [];
     let currentEntry = entry;
     if (!currentEntry) {
       const url = await this.browser.waitForStableCurrentChatUrl(15000).catch(() => null);
       if (!url) {
         this.log('切换新对话前最终复扫：当前对话地址尚未稳定，无法建立缩略图断点；稍后仍会按旧对话回查规则处理');
+        completeWorkflow(this.state, { detectedTotal: 0, processed: 0, reason: 'chat-url-not-ready' }); await this.checkpoint();
         return { entry: null, detectedTotal: 0, added: [], promoted: [] };
       }
       currentEntry = ignoredChats.find((item) => item.url === url);
@@ -292,14 +317,14 @@ class TaskRunner extends EventEmitter {
       }
     }
     currentEntry.processedIndexes = [...new Set(currentEntry.processedIndexes || [])].sort((a, b) => a - b);
-    const maxPasses = Math.max(1, Math.min(5, Number(options.maxPasses) || 2));
+    const maxPasses = Math.max(1, Math.min(5, Number(options.maxPasses) || (isBackgroundTest ? 3 : 2)));
     const allAdded = []; let detectedTotal = Math.max(0, Number(options.initialTotal) || 0); let noProgressPasses = 0;
     this.log(`准备开启新对话前执行最终复扫；当前已处理缩略图${currentEntry.processedIndexes.length}/5`);
     for (let pass = 1; pass <= maxPasses && currentEntry.processedIndexes.length < 5; pass += 1) {
       await this.waitIfPaused();
       let viewerInfo;
       try {
-        viewerInfo = await this.browser.getViewerImageCount({ targetTotal: 5, findWaitSeconds: pass === 1 ? 4 : 2, maxWaitSeconds: pass === 1 ? 6 : 4 });
+        viewerInfo = await this.browser.getViewerImageCount({ targetTotal: isBackgroundTest ? 1 : 5, findWaitSeconds: pass === 1 ? 4 : 2, maxWaitSeconds: pass === 1 ? 6 : 4 });
       } catch (error) {
         currentEntry.lastError = `最终复扫第${pass}次检测失败：${error.message}`;
         this.log(currentEntry.lastError);
@@ -332,7 +357,7 @@ class TaskRunner extends EventEmitter {
       }
       const processedAfter = currentEntry.processedIndexes.length;
       this.log(`切换前最终复扫第${pass}/${maxPasses}次：检测${detectedTotal}/5张，已处理${processedAfter}/5张，本次新增${Math.max(0, processedAfter - processedBefore)}张`);
-      if (detectedTotal >= 5 && processedAfter >= 5) {
+      if ((isBackgroundTest && detectedTotal > 0 && processedAfter >= detectedTotal) || (detectedTotal >= 5 && processedAfter >= 5)) {
         currentEntry.status = 'collected'; currentEntry.collectedAt = new Date().toISOString(); currentEntry.lastError = null;
         break;
       }
@@ -340,17 +365,21 @@ class TaskRunner extends EventEmitter {
       currentEntry.nextCheckAt = new Date(Date.now() + 5 * 60000).toISOString();
       noProgressPasses = processedAfter > processedBefore ? 0 : noProgressPasses + 1;
       if (noProgressPasses >= 1) {
-        this.log('切换前最终复扫没有新增已处理缩略图，立即保留当前对话断点并交给稍后回查');
-        break;
+        const pageReportsFiveButNotAllSaved = detectedTotal >= 5 && processedAfter < 5;
+        if (!pageReportsFiveButNotAllSaved || pass >= maxPasses) {
+          this.log('切换前最终复扫没有新增已处理缩略图，已跑完必要复扫，保留当前对话断点并交给稍后回查');
+          break;
+        }
+        this.log(`页面已报告5张但只保存${processedAfter}/5张；即使本次无新增仍继续第${pass + 1}/${maxPasses}次复扫，等待延迟图片出现`);
       }
       if (pass < maxPasses) await sleep(1200);
     }
-    if (currentEntry.processedIndexes.length < 5) {
+    if (!isBackgroundTest && currentEntry.processedIndexes.length < 5) {
       currentEntry.status = 'pending';
       currentEntry.nextCheckAt ||= new Date(Date.now() + 5 * 60000).toISOString();
     }
     const promoted = await this.promotePendingPool(context);
-    await this.checkpoint();
+    completeWorkflow(this.state, { detectedTotal, processed: currentEntry.processedIndexes.length, added: allAdded.length, promoted: promoted.length }); await this.checkpoint();
     this.log(`切换新对话前最终复扫完成：检测${detectedTotal}/5张，累计已处理${currentEntry.processedIndexes.length}/5张，新增暂存${allAdded.length}张，转入正式目录${promoted.length}张`);
     return { entry: currentEntry, detectedTotal, added: allAdded, promoted };
   }
@@ -383,39 +412,43 @@ class TaskRunner extends EventEmitter {
     context.ps.pendingPool ||= [];
     await this.migrateLegacyEntryToPool(context, entry);
     const poolDir = path.join(context.ps.outputDir, '.pending_pool'); await fsp.mkdir(poolDir, { recursive: true });
-    const poolHashes = new Set([...(context.ps.hashes || []), ...context.ps.pendingPool.map((item) => item.hash).filter(Boolean)]);
+    context.ps.rejectedHashes ||= [];
+    const poolHashes = new Set([...(context.ps.hashes || []), ...context.ps.pendingPool.map((item) => item.hash).filter(Boolean), ...context.ps.rejectedHashes]);
     const processed = [...new Set(entry.processedIndexes || [])];
     const needed = Math.max(0, Math.min(5, total) - processed.length);
     if (needed <= 0) return [];
     const shortId = String(entry.id || crypto.randomUUID()).replace(/[^a-zA-Z0-9]/g, '').slice(0, 10);
     const downloaded = await this.browser.downloadNewImages(poolDir, `${safeName(context.productName)}_pool_${shortId}`, 1, needed, poolHashes, processed);
-    for (const thumbnailIndex of downloaded.processedIndexes || []) if (Number.isInteger(thumbnailIndex) && !processed.includes(thumbnailIndex)) processed.push(thumbnailIndex);
     const added = []; this.state.qualityStats ||= { checked: 0, approved: 0, warnings: 0, rejected: 0 };
     transitionWorkflow(this.state, '质量检测', { ...this.stepContext(`候选${downloaded.length}张`) }); await this.checkpoint();
-    for (const image of downloaded) {
-      let quality = { approved: true, status: 'approved', issues: [], reviewNotes: `${image.width}x${image.height}` };
-      if (this.state.qualityPolicy?.enabled !== false) {
-        try { quality = await analyzeProductImage(image.file, context.images || [], this.state.qualityPolicy); }
-        catch (error) { quality = { approved: false, status: 'revise', issues: [], hardIssues: [error.message], reviewNotes: `质量检测失败：${error.message}` }; }
-      }
+    const qualityResults = await Promise.all(downloaded.map(async (image) => {
+      if (this.state.qualityPolicy?.enabled === false) return { approved: true, status: 'approved', issues: [], reviewNotes: `${image.width}x${image.height}` };
+      try { return await analyzeProductImage(image.file, context.images || [], this.state.qualityPolicy); }
+      catch (error) { return { approved: false, status: 'revise', issues: [], hardIssues: [error.message], reviewNotes: `质量检测失败：${error.message}` }; }
+    }));
+    const warningNotes = [];
+    for (let imageIndex = 0; imageIndex < downloaded.length; imageIndex += 1) {
+      const image = downloaded[imageIndex]; const quality = qualityResults[imageIndex];
       this.state.qualityStats.checked += 1;
-      if (Number.isInteger(image.thumbnailIndex) && !processed.includes(image.thumbnailIndex)) processed.push(image.thumbnailIndex);
       if (!quality.approved) {
+        if (image.hash && !context.ps.rejectedHashes.includes(image.hash)) context.ps.rejectedHashes.push(image.hash);
         this.state.qualityStats.rejected += 1; await fsp.unlink(image.file).catch(() => {});
         await appendIndex(context.outputs, { run_id: this.state.runId, job_id: `c${context.cycle || 1}-${context.productId}-quality-${entry.id}-${image.thumbnailIndex}`, product_id: context.productId, variant: '', output_file: '', status: 'revise', review_notes: quality.reviewNotes, prompt: context.productPrompt.slice(0, 500) });
         this.log(`质量检测拒绝1张候选图，不计入数量：${quality.reviewNotes}`); continue;
       }
+      if (Number.isInteger(image.thumbnailIndex) && !processed.includes(image.thumbnailIndex)) processed.push(image.thumbnailIndex);
       this.state.qualityStats.approved += 1;
-      if (quality.issues?.length) { this.state.qualityStats.warnings += 1; this.log(`质量检测提示（为保证产量仍保留）：${quality.reviewNotes}`); }
+      if (quality.issues?.length) { this.state.qualityStats.warnings += 1; warningNotes.push(quality.reviewNotes); }
       context.ps.pendingPool.push({ file: image.file, hash: image.hash, format: image.format, width: image.width, height: image.height, sourceChatId: entry.id, sourceUrl: entry.url, thumbnailIndex: image.thumbnailIndex, inputFingerprint: entry.inputFingerprint || context.inputFingerprint, savedAt: new Date().toISOString(), status: 'pending' });
       context.ps.pendingPool[context.ps.pendingPool.length - 1].quality = quality;
       added.push({ ...image, quality });
     }
+    if (warningNotes.length) this.log(`质量检测提示汇总（${warningNotes.length}张为保证产量仍保留）：${warningNotes.join('；')}`);
     completeWorkflow(this.state, { checked: downloaded.length, accepted: added.length });
     entry.processedIndexes = processed.sort((a, b) => a - b);
     entry.detectedTotal = total;
     await this.syncPendingPoolState(context); await this.checkpoint();
-    this.log(`已把当前对话新增的${added.length}张图片放入商品统一暂存池；暂不计正式图片数`);
+    this.log(isBackgroundTest ? `当前对话检测到${total}张，质量检查后保留${added.length}张，立即计入50张目标` : `已把当前对话新增的${added.length}张图片放入商品统一暂存池；暂不计正式图片数`);
     return added;
   }
 
@@ -428,14 +461,16 @@ class TaskRunner extends EventEmitter {
     }
     while (context.ps.completed < 50) {
       const remainder = context.ps.completed % 5;
-      const neededForRound = remainder === 0 ? 5 : 5 - remainder;
+      const neededForRound = isBackgroundTest ? 1 : (remainder === 0 ? 5 : 5 - remainder);
       const groups = new Map();
       for (const item of context.ps.pendingPool.filter((candidate) => candidate.status === 'pending' && candidate.inputFingerprint)) {
         if (!groups.has(item.inputFingerprint)) groups.set(item.inputFingerprint, []);
         groups.get(item.inputFingerprint).push(item);
       }
-      const candidates = [...groups.values()].map((items) => items.sort((a, b) => String(a.savedAt).localeCompare(String(b.savedAt)))).filter((items) => items.length >= neededForRound).sort((a, b) => String(a[0].savedAt).localeCompare(String(b[0].savedAt)))[0];
-      if (!candidates) break;
+      const candidates = isBackgroundTest
+        ? context.ps.pendingPool.filter((candidate) => candidate.status === 'pending').sort((a, b) => String(a.savedAt).localeCompare(String(b.savedAt)))
+        : [...groups.values()].map((items) => items.sort((a, b) => String(a.savedAt).localeCompare(String(b.savedAt)))).filter((items) => items.length >= neededForRound).sort((a, b) => String(a[0].savedAt).localeCompare(String(b[0].savedAt)))[0];
+      if (!candidates || !candidates.length) break;
       const selected = candidates.slice(0, neededForRound); const targets = selected.map((item) => {
         let number = 1; while (usedNumbers.has(number)) number += 1; usedNumbers.add(number);
         return { ...item, final: path.join(context.ps.outputDir, `${stem}_${String(number).padStart(3, '0')}${extensionFor(item.format)}`) };
@@ -456,7 +491,7 @@ class TaskRunner extends EventEmitter {
       const selectedFiles = new Set(selected.map((item) => item.file));
       context.ps.pendingPool = context.ps.pendingPool.filter((item) => !selectedFiles.has(item.file));
       context.ps.round = Math.min(10, Math.floor(context.ps.completed / 5));
-      this.log(`统一暂存池已补齐一组5张，已转入正式目录并计为第${context.ps.round}轮`);
+      this.log(isBackgroundTest ? `本对话图片已立即转入正式目录：当前${context.ps.completed}/50张` : `统一暂存池已补齐一组5张，已转入正式目录并计为第${context.ps.round}轮`);
       await this.syncPendingPoolState(context); await this.checkpoint();
     }
     return promoted;
@@ -465,6 +500,7 @@ class TaskRunner extends EventEmitter {
   resetWatchdogSamples() { this.watchLastSignature = null; this.watchSameCount = 0; }
   observeWatchState(state) {
     if (state?.hasRateLimit) { this.resetWatchdogSamples(); return 'rate-limit'; }
+    if (state?.hasSecurity || state?.hasLogin) { this.resetWatchdogSamples(); return 'security'; }
     if (this.state && isWorkflowOverdue(this.state)) { this.resetWatchdogSamples(); return 'step-timeout'; }
     if (!state?.found || state.hasStop) { this.resetWatchdogSamples(); return false; }
     const signature = JSON.stringify({ phase: this.currentPhase, title: state.title, hasComposer: state.hasComposer, hasSecurity: state.hasSecurity, downloadCount: state.downloadCount, generatedCount: state.generatedCount, attachmentCount: state.attachmentCount, submitEnabled: state.submitEnabled });
@@ -473,7 +509,7 @@ class TaskRunner extends EventEmitter {
     this.log(`界面无变化检测：${this.watchSameCount}/3（${this.currentPhase}）`);
     if (this.watchSameCount < 3) return false;
     if (this.recoveryContext) { this.watchRecoveryCount += 1; this.resetWatchdogSamples(); return 'recover'; }
-    this.log(`ChatGPT界面连续3次无变化，当前没有可恢复的生成上下文；将返回ChatGPT首页并刷新，不暂停任务。当前阶段：${this.currentPhase}`);
+    this.log(`ChatGPT界面连续3次无变化，当前没有可恢复的生成上下文；将请求当前步骤安全退出。当前阶段：${this.currentPhase}`);
     this.resetWatchdogSamples(); return 'recover-page';
   }
   async recoverCurrentOperation() {
@@ -501,7 +537,7 @@ class TaskRunner extends EventEmitter {
   startWatchdog() {
     this.stopWatchdog(); this.resetWatchdogSamples();
     this.watchTimer = setInterval(async () => {
-      if (!this.running || this.paused || this.stopped || this.rateLimitCooling || this.currentPhase === '等待中' || this.nativeSaveInFlight || this.watchInFlight || !this.browser?.connected) return;
+      if (!this.running || this.paused || this.stopped || this.rateLimitCooling || this.workflowRecoveryRequested || this.currentPhase === '等待中' || this.currentPhase === '上传中' || this.nativeSaveInFlight || this.watchInFlight || !this.browser?.connected) return;
       this.watchInFlight = true;
       try {
         const decision = this.observeWatchState(await this.browser.inspectWatchState());
@@ -510,6 +546,7 @@ class TaskRunner extends EventEmitter {
           const step = this.state?.workflow?.current;
           this.log(`${decision === 'step-timeout' ? '步骤超过明确时限' : '界面连续无变化'}，已请求当前操作安全退出；步骤：${step?.name || this.currentPhase}；恢复动作：${step?.recovery || '刷新并打开新对话'}`);
         } else if (decision === 'recover-page') { this.workflowRecoveryRequested = true; this.log(`界面监控请求页面恢复，等待当前安全步骤退出：${this.currentPhase}`); }
+        else if (decision === 'security') { await this.enterSafetyHold('检测到登录页、验证码或安全验证，禁止继续自动操作'); }
         else if (decision === 'rate-limit') { await this.cooldownForRateLimit('界面监控检测到请求过于频繁'); this.rateLimitRestartRequested = true; this.workflowRecoveryRequested = true; this.log('限流冷却已经结束，已通知当前轮次退出原等待阶段并从新对话继续'); }
       } catch (error) { this.log(`界面监控暂时无法读取：${error.message}`); }
       finally { this.watchInFlight = false; }
@@ -518,8 +555,8 @@ class TaskRunner extends EventEmitter {
   stopWatchdog() { if (this.watchTimer) clearInterval(this.watchTimer); this.watchTimer = null; this.watchInFlight = false; }
 
   async loginCheck(root) {
-    const outputs = path.join(root, 'outputs'); await fsp.mkdir(outputs, { recursive: true });
-    const browser = new ChatGPTAutomation({ downloadDir: this.downloadsDir, log: (m) => this.emit('log', m) });
+    const outputs = path.join(root, outputFolderName); await fsp.mkdir(outputs, { recursive: true });
+    const browser = new ChatGPTAutomation({ userDataDir: this.userDataDir, downloadDir: this.downloadsDir, log: (m) => this.emit('log', m) });
     await browser.launch(); return { browser, loggedIn: await browser.isLoggedIn() };
   }
 
@@ -527,8 +564,7 @@ class TaskRunner extends EventEmitter {
     const previousThumbnailProgressVersion = prior.thumbnailProgressVersion || 1;
     const previousIgnoredCheckEveryChats = Number.isFinite(prior.ignoredCheckEveryChats) ? prior.ignoredCheckEveryChats : 10;
     const ignoredCheckEveryChats = !prior.ignoredCheckPolicyVersion && previousIgnoredCheckEveryChats === 5 ? 10 : previousIgnoredCheckEveryChats;
-    const state = { ...prior, version: 4, pendingPoolVersion: 1, thumbnailProgressVersion: 3, ignoredCheckPolicyVersion: 2, root, runId: prior.runId || `legacy-${Date.parse(prior.createdAt) || Date.now()}`, runOutputDir: prior.runOutputDir || null, runOutputDirs: prior.runOutputDirs || (prior.runOutputDir ? [prior.runOutputDir] : []), status: prior.status || 'stopped', currentCycle: prior.currentCycle || 1, totalCycles: prior.totalCycles || 1, waitEnabled: prior.waitEnabled !== false, waitMinSeconds: Number.isFinite(prior.waitMinSeconds) ? prior.waitMinSeconds : 20, waitMaxSeconds: Number.isFinite(prior.waitMaxSeconds) ? prior.waitMaxSeconds : 60, generationTimeoutSeconds: Number.isFinite(prior.generationTimeoutSeconds) ? prior.generationTimeoutSeconds : 60, ignoredCheckEveryChats, rateLimitLevel: Number.isFinite(prior.rateLimitLevel) ? prior.rateLimitLevel : 0, rateLimitUntil: prior.rateLimitUntil || null, rateLimitRecoveryPending: prior.rateLimitRecoveryPending === true, currentProduct: prior.currentProduct || 0, products: prior.products || {}, ignoredChats: prior.ignoredChats || [], newChatsSinceIgnoredCheck: prior.newChatsSinceIgnoredCheck || 0, adaptiveScheduling: prior.adaptiveScheduling !== false, scheduler: prior.scheduler || {}, workflow: prior.workflow || { version: 1, sequence: 0, history: [], current: null, lastCompleted: null, recoveryCount: 0 }, qualityPolicy: { enabled: prior.qualityPolicy?.enabled !== false, minDimension: prior.qualityPolicy?.minDimension || 512, squareTolerance: prior.qualityPolicy?.squareTolerance || 0.08, requireWhite: prior.qualityPolicy?.requireWhite === true, strictConsistency: prior.qualityPolicy?.strictConsistency === true }, qualityStats: prior.qualityStats || { checked: 0, approved: 0, warnings: 0, rejected: 0 } };
-    state.version = 5;
+    const state = { ...prior, version: 6, pendingPoolVersion: 1, thumbnailProgressVersion: 3, ignoredCheckPolicyVersion: 2, root, runId: prior.runId || `legacy-${Date.parse(prior.createdAt) || Date.now()}`, runOutputDir: prior.runOutputDir || null, runOutputDirs: prior.runOutputDirs || (prior.runOutputDir ? [prior.runOutputDir] : []), status: prior.status || 'stopped', currentCycle: prior.currentCycle || 1, totalCycles: prior.totalCycles || 1, waitEnabled: prior.waitEnabled !== false, waitMinSeconds: Number.isFinite(prior.waitMinSeconds) ? prior.waitMinSeconds : 20, waitMaxSeconds: Number.isFinite(prior.waitMaxSeconds) ? prior.waitMaxSeconds : 60, generationTimeoutSeconds: Number.isFinite(prior.generationTimeoutSeconds) ? prior.generationTimeoutSeconds : 60, ignoredCheckEveryChats, rateLimitLevel: Number.isFinite(prior.rateLimitLevel) ? prior.rateLimitLevel : 0, rateLimitUntil: prior.rateLimitUntil || null, rateLimitRecoveryPending: prior.rateLimitRecoveryPending === true, currentProduct: prior.currentProduct || 0, products: prior.products || {}, ignoredChats: prior.ignoredChats || [], newChatsSinceIgnoredCheck: prior.newChatsSinceIgnoredCheck || 0, adaptiveScheduling: prior.adaptiveScheduling !== false, scheduler: prior.scheduler || {}, workflow: prior.workflow || { version: 1, sequence: 0, history: [], current: null, lastCompleted: null, recoveryCount: 0 }, safety: prior.safety || { version: 1, status: 'ready', recoveryFailures: 0, failureWindowStartedAt: null, reason: null, heldAt: null, holdUntil: null, manualResumeRequired: false }, qualityPolicy: { enabled: prior.qualityPolicy?.enabled !== false, minDimension: prior.qualityPolicy?.minDimension || 512, squareTolerance: prior.qualityPolicy?.squareTolerance || 0.08, requireWhite: prior.qualityPolicy?.requireWhite === true, strictConsistency: prior.qualityPolicy?.strictConsistency === true }, qualityStats: prior.qualityStats || { checked: 0, approved: 0, warnings: 0, rejected: 0 } };
     state.creativePolicy = {
       enabled: prior.creativePolicy?.enabled !== false,
       aiEnabled: prior.creativePolicy?.aiEnabled !== false,
@@ -538,13 +574,13 @@ class TaskRunner extends EventEmitter {
     };
     state.scheduler.enabled = state.adaptiveScheduling;
     if (state.workflow.current?.status === 'active') { state.workflow.current.status = 'interrupted'; state.workflow.current.finishedAt = new Date().toISOString(); state.workflow.history ||= []; state.workflow.history.push(state.workflow.current); state.workflow.current = null; }
-    for (const ps of Object.values(state.products)) { ps.hashes ||= []; ps.thumbnailProgress ||= {}; ps.pendingPool ||= []; ps.chatAttempts ||= 0; if (previousThumbnailProgressVersion < 3) ps.thumbnailProgress = {}; ps.completed ||= 0; ps.round = Math.min(10, Math.floor(ps.completed / 5)); }
+    for (const ps of Object.values(state.products)) { ps.hashes ||= []; ps.rejectedHashes ||= []; ps.thumbnailProgress ||= {}; ps.pendingPool ||= []; ps.chatAttempts ||= 0; if (previousThumbnailProgressVersion < 3) ps.thumbnailProgress = {}; ps.completed ||= 0; ps.round = Math.min(10, Math.floor(ps.completed / 5)); }
     for (const entry of state.ignoredChats) { entry.stagedFiles ||= []; entry.stagedIndexes ||= []; entry.processedIndexes ||= []; if (previousThumbnailProgressVersion < 3) entry.processedIndexes = []; if (entry.status === 'failed' || entry.status === 'collecting') { entry.status = 'pending'; entry.nextCheckAt ||= new Date().toISOString(); } }
     return state;
   }
 
   async inspectSavedState(root) {
-    const file = path.join(root, 'outputs', 'task-state.json');
+    const file = path.join(root, outputFolderName, 'task-state.json');
     try {
       const prior = this.migrateState(JSON.parse(await fsp.readFile(file, 'utf8')), root);
       return { available: prior.root === root && prior.status !== 'completed', runId: prior.runId, status: prior.status, currentProduct: prior.currentProduct, currentCycle: prior.currentCycle, totalCycles: prior.totalCycles, waitEnabled: prior.waitEnabled, waitMinSeconds: prior.waitMinSeconds, waitMaxSeconds: prior.waitMaxSeconds, generationTimeoutSeconds: prior.generationTimeoutSeconds, ignoredCheckEveryChats: prior.ignoredCheckEveryChats, adaptiveScheduling: prior.adaptiveScheduling, qualityPolicy: prior.qualityPolicy, creativePolicy: prior.creativePolicy, createdAt: prior.createdAt };
@@ -554,8 +590,8 @@ class TaskRunner extends EventEmitter {
   async start(root, mode = 'new', options = {}) {
     if (this.running) throw new Error('已有任务正在运行');
     this.running = true; this.paused = false; this.stopped = false; this.emitStatus({ phase: '准备中' });
-    let finalProtectionEligible = false; let restartAfterFatal = false; let fatalReason = null;
-    const outputs = path.join(root, 'outputs'); await fsp.mkdir(outputs, { recursive: true });
+    let finalProtectionEligible = false; let restartAfterManualResume = false; let fatalReason = null;
+    const outputs = path.join(root, outputFolderName); await fsp.mkdir(outputs, { recursive: true });
     this.logFile = path.join(outputs, 'run.log'); this.stateFile = path.join(outputs, 'task-state.json');
     try {
       const products = await scanProducts(root);
@@ -564,7 +600,7 @@ class TaskRunner extends EventEmitter {
       let prior = null; try { prior = JSON.parse(await fsp.readFile(this.stateFile, 'utf8')); } catch {}
       if (mode === 'continue') {
         if (!prior || prior.root !== root) throw new Error('没有可继续的历史任务');
-        this.state = this.migrateState(prior, root); this.state.status = 'active';
+        this.state = this.migrateState(prior, root); this.state.status = 'active'; const resumedSafety = this.ensureSafetyState(); resumedSafety.status = 'ready'; resumedSafety.reason = null; resumedSafety.manualResumeRequired = false; resumedSafety.recoveryFailures = 0; resumedSafety.failureWindowStartedAt = null;
         if (options.waitEnabled !== undefined) this.state.waitEnabled = options.waitEnabled !== false;
         if (options.waitMinSeconds !== undefined) this.state.waitMinSeconds = Math.max(0, Math.min(600, Math.trunc(Number(options.waitMinSeconds) || 0)));
         if (options.waitMaxSeconds !== undefined) this.state.waitMaxSeconds = Math.max(this.state.waitMinSeconds, Math.min(600, Math.trunc(Number(options.waitMaxSeconds) || 0)));
@@ -590,8 +626,7 @@ class TaskRunner extends EventEmitter {
         const ignoredCheckEveryChats = Math.max(1, Math.min(20, Math.trunc(Number(options.ignoredCheckEveryChats ?? 10) || 10)));
         const adaptiveScheduling = options.adaptiveScheduling !== false;
         const qualityPolicy = { enabled: options.qualityPolicy?.enabled !== false, minDimension: Math.max(256, Math.min(2048, Math.trunc(Number(options.qualityPolicy?.minDimension) || 512))), squareTolerance: 0.08, requireWhite: options.qualityPolicy?.requireWhite === true, strictConsistency: options.qualityPolicy?.strictConsistency === true };
-        this.state = { version: 4, pendingPoolVersion: 1, thumbnailProgressVersion: 2, ignoredCheckPolicyVersion: 2, runId: crypto.randomUUID(), root, runOutputDir: layout.runDir, runOutputDirs: [layout.runDir], createdAt: new Date().toISOString(), status: 'active', currentCycle: 1, totalCycles, waitEnabled, waitMinSeconds: waitEnabled ? waitMinSeconds : 0, waitMaxSeconds: waitEnabled ? waitMaxSeconds : 0, generationTimeoutSeconds, ignoredCheckEveryChats, adaptiveScheduling, scheduler: { enabled: adaptiveScheduling }, workflow: { version: 1, sequence: 0, history: [], current: null, lastCompleted: null, recoveryCount: 0 }, qualityPolicy, qualityStats: { checked: 0, approved: 0, warnings: 0, rejected: 0 }, rateLimitLevel: 0, rateLimitUntil: null, rateLimitRecoveryPending: false, currentProduct: 0, products: {}, ignoredChats: [], newChatsSinceIgnoredCheck: 0 };
-        this.state.version = 5;
+        this.state = { version: 6, pendingPoolVersion: 1, thumbnailProgressVersion: 3, ignoredCheckPolicyVersion: 2, runId: crypto.randomUUID(), root, runOutputDir: layout.runDir, runOutputDirs: [layout.runDir], createdAt: new Date().toISOString(), status: 'active', currentCycle: 1, totalCycles, waitEnabled, waitMinSeconds: waitEnabled ? waitMinSeconds : 0, waitMaxSeconds: waitEnabled ? waitMaxSeconds : 0, generationTimeoutSeconds, ignoredCheckEveryChats, adaptiveScheduling, scheduler: { enabled: adaptiveScheduling }, workflow: { version: 1, sequence: 0, history: [], current: null, lastCompleted: null, recoveryCount: 0 }, safety: { version: 1, status: 'ready', recoveryFailures: 0, failureWindowStartedAt: null, reason: null, heldAt: null, holdUntil: null, manualResumeRequired: false }, qualityPolicy, qualityStats: { checked: 0, approved: 0, warnings: 0, rejected: 0 }, rateLimitLevel: 0, rateLimitUntil: null, rateLimitRecoveryPending: false, currentProduct: 0, products: {}, ignoredChats: [], newChatsSinceIgnoredCheck: 0 };
         this.state.creativePolicy = {
           enabled: options.creativePolicy?.enabled !== false,
           aiEnabled: options.creativePolicy?.aiEnabled !== false,
@@ -599,17 +634,17 @@ class TaskRunner extends EventEmitter {
           forceReanalyze: options.creativePolicy?.forceReanalyze === true,
           globalRequirements: String(options.creativePolicy?.globalRequirements || '').slice(0, 4000),
         };
-        for (const product of validProducts) this.state.products[product.id] = { outputDir: layout.productDirs[product.name], completed: 0, round: 0, chatAttempts: 0, hashes: [], thumbnailProgress: {}, pendingPool: [] };
+        for (const product of validProducts) this.state.products[product.id] = { outputDir: layout.productDirs[product.name], completed: 0, round: 0, chatAttempts: 0, hashes: [], rejectedHashes: [], thumbnailProgress: {}, pendingPool: [] };
       }
       this.scheduler = new AdaptiveScheduler({ ...this.state.scheduler, enabled: this.state.adaptiveScheduling }); this.state.scheduler = this.scheduler.snapshot();
       this.log(`本次任务设置：单对话生成等待上限${this.state.generationTimeoutSeconds}秒；每${this.state.ignoredCheckEveryChats}个新对话回查；轮次等待${this.state.waitEnabled ? `${this.state.waitMinSeconds}–${this.state.waitMaxSeconds}秒` : '关闭'}；自适应调度${this.state.adaptiveScheduling ? '开启' : '关闭'}；质量检测${this.state.qualityPolicy.enabled ? '开启' : '关闭'}`);
       await this.checkpoint();
-      const browser = this.browser?.connected ? this.browser : new ChatGPTAutomation({ downloadDir: this.downloadsDir, log: (m) => this.log(m) });
+      const browser = this.browser?.connected ? this.browser : new ChatGPTAutomation({ userDataDir: this.userDataDir, downloadDir: this.downloadsDir, log: (m) => this.log(m) });
       this.browser = browser; if (!browser.connected) await browser.launch(); this.startWatchdog();
       if (!(await browser.isLoggedIn())) {
         const initialPageState = await browser.inspectWatchState().catch(() => null);
         if (initialPageState?.hasRateLimit) { await this.cooldownForRateLimit('__RATE_LIMITED__:启动时检测到ChatGPT提示请求过于频繁'); await this.recoverAfterRateLimitCooldown('程序启动时的限流冷却结束'); }
-        else { this.pause('ChatGPT 尚未登录，请在已打开的 Edge 中完成登录，然后点击继续'); await this.waitIfPaused(); }
+        else { await this.enterSafetyHold('ChatGPT尚未登录或登录状态不可确认，请在已打开的Edge中完成人工检查'); await this.waitIfPaused(); }
       }
       finalProtectionEligible = true;
       if (await this.resumeSavedRateLimitCooldownIfNeeded()) await this.recoverAfterRateLimitCooldown('从已保存的限流冷却状态恢复');
@@ -621,8 +656,8 @@ class TaskRunner extends EventEmitter {
           const reason = `产品“${product.name}”缺少有效参考图或TXT提示词，已自动跳过并进入下一个商品`;
           this.log(reason); this.state.skippedProducts ||= []; this.state.skippedProducts.push({ productId: product.id, reason, skippedAt: new Date().toISOString() }); this.state.currentProduct = p + 1; await this.checkpoint(); continue;
         }
-        const ps = this.state.products[product.id] ||= { outputDir: null, completed: 0, round: 0, chatAttempts: 0, hashes: [], thumbnailProgress: {}, pendingPool: [] };
-        ps.thumbnailProgress ||= {}; ps.pendingPool ||= []; ps.chatAttempts ||= 0;
+        const ps = this.state.products[product.id] ||= { outputDir: null, completed: 0, round: 0, chatAttempts: 0, hashes: [], rejectedHashes: [], thumbnailProgress: {}, pendingPool: [] };
+        ps.thumbnailProgress ||= {}; ps.pendingPool ||= []; ps.rejectedHashes ||= []; ps.chatAttempts ||= 0;
         if (ps.outputDir) await fsp.mkdir(ps.outputDir, { recursive: true });
         else if (this.state.runOutputDir) { ps.outputDir = path.join(this.state.runOutputDir, safeName(product.name)); await fsp.mkdir(ps.outputDir, { recursive: true }); }
         else ps.outputDir = await allocateOutputDir(outputs, product.name, null);
@@ -632,12 +667,13 @@ class TaskRunner extends EventEmitter {
           try {
           await this.waitIfPaused();
           if (this.rateLimitRestartRequested) { await this.recoverAfterRateLimitCooldown('界面监控触发的限流冷却结束'); this.rateLimitRestartRequested = false; }
-          const nextRound = ps.round + 1; this.detectedImages = 0;
+          const nextRound = isBackgroundTest ? (ps.chatAttempts % 10) + 1 : ps.round + 1; this.detectedImages = 0;
           const latestProduct = await scanProductDirectory(product.dir, product.name, { round: nextRound, maxImages: 10 });
           if (!latestProduct.valid) { const reason = `商品“${product.name}”上传前重新检查发现缺少有效参考图或TXT提示词，已自动跳过并进入下一个商品`; this.log(reason); ps.status = 'skipped'; ps.skipReason = reason; this.state.skippedProducts ||= []; this.state.skippedProducts.push({ productId: product.id, reason, skippedAt: new Date().toISOString() }); this.recoveryContext = null; await this.checkpoint(); break roundLoop; }
           if (JSON.stringify(latestProduct.images) !== JSON.stringify(product.images) || latestProduct.prompt !== product.prompt) this.log(`商品“${product.name}”文件夹内容已变化，本轮将使用最新的${latestProduct.images.length}张参考图和TXT提示词`);
           if (latestProduct.imageSelection?.selectedAngleGroup) this.log(`本轮参考图限量为${latestProduct.images.length}/10张：根目录${Math.min(latestProduct.imageSelection.rootAvailable, 10)}张 + 角度组“${latestProduct.imageSelection.selectedAngleGroup}”${latestProduct.imageSelection.selectedAngleCount}张`);
-          const preparedPrompt = await this.runStep('生成差异化创意', () => this.prepareRoundPrompt(latestProduct, nextRound, this.state.currentCycle), { maxAttempts: 2 });
+          const sourceFingerprint = await buildInputFingerprint(latestProduct.images, latestProduct.prompt);
+          const preparedPrompt = await this.runStep('生成差异化创意', async () => (await this.consumeRoundPromptPrefetch(latestProduct, nextRound, this.state.currentCycle, sourceFingerprint)) || this.prepareRoundPrompt(latestProduct, nextRound, this.state.currentCycle), { maxAttempts: 2 });
           const prompt = preparedPrompt.prompt;
           const inputFingerprint = await buildInputFingerprint(latestProduct.images, prompt);
           ps.creativeFingerprint = preparedPrompt.creativeFingerprint;
@@ -646,27 +682,35 @@ class TaskRunner extends EventEmitter {
           await this.runStep('检查旧对话', () => this.checkIgnoredChatsIfDue(this.recoveryContext), { maxAttempts: 1 });
           if (ps.completed >= 50) { this.recoveryContext = null; break roundLoop; }
           this.emitStatus({ product: product.name, productIndex: p + 1, productTotal: products.length, round: nextRound, completed: ps.completed, phase: '新对话中' });
-          await this.runStep('打开新对话', () => browser.newChat(), { maxAttempts: 3, onRetry: () => browser.recoverToFreshChatPage() });
+          await this.runStep('打开新对话', () => browser.newChat(), { maxAttempts: 1 });
           this.emitStatus({ product: product.name, productIndex: p + 1, productTotal: products.length, round: nextRound, completed: ps.completed, phase: '上传中' });
-          await this.runStep('上传参考图', ({ deadlineAt }) => browser.uploadReferences(latestProduct.images, () => this.stopped ? '__STOPPED__' : (this.workflowRecoveryRequested || Date.now() >= deadlineAt ? '__WORKFLOW_RECOVERY__' : false), { deadlineAt, maxRefreshCycles: 2 }), { maxAttempts: 2, onRetry: () => browser.recoverToFreshChatPage() });
+          await this.runStep('上传参考图', ({ deadlineAt }) => browser.uploadReferences(latestProduct.images, () => this.stopped ? '__STOPPED__' : (this.workflowRecoveryRequested || Date.now() >= deadlineAt ? '__WORKFLOW_RECOVERY__' : false), { deadlineAt, maxRefreshCycles: 0 }), { maxAttempts: 1 });
           const adaptiveGenerationSeconds = this.ensureScheduler().generationTimeoutSeconds(this.state.generationTimeoutSeconds); this.state.activeGenerationTimeoutSeconds = adaptiveGenerationSeconds;
           if (adaptiveGenerationSeconds !== this.state.generationTimeoutSeconds) this.log(`自适应调度根据近期生成速度把本对话等待时间调整为${adaptiveGenerationSeconds}秒（用户上限${this.state.generationTimeoutSeconds}秒）`);
           this.recoveryContext.generationStartedAt = Date.now();
-          await this.runStep('发送提示词', () => browser.sendPrompt(prompt, adaptiveGenerationSeconds), { maxAttempts: 1 }); ps.chatAttempts += 1; await this.recordNewConversation(); await this.checkpoint(); this.emitStatus({ product: product.name, round: nextRound, completed: ps.completed, phase: '生成中' });
+          await this.runStep('发送提示词', () => browser.sendPrompt(prompt, adaptiveGenerationSeconds), { maxAttempts: 1 }); ps.chatAttempts += 1;
+          this.startRoundPromptPrefetch(latestProduct, (ps.chatAttempts % 10) + 1, this.state.currentCycle, sourceFingerprint);
+          await this.recordNewConversation(); await this.checkpoint(); this.emitStatus({ product: product.name, round: nextRound, completed: ps.completed, phase: '生成中' });
           let generationResult;
           try { generationResult = await this.runStep('等待生成', () => browser.waitForGeneration(() => { if (this.skipCurrentProduct) throw new Error('__SKIP_PRODUCT__'); if (this.rateLimitRestartRequested) throw new Error('__RATE_LIMIT_RESTART__'); if (this.workflowRecoveryRequested) throw new Error('__WORKFLOW_RECOVERY__'); return this.paused || this.recoveryActive || this.rateLimitCooling; }), { timeoutMs: (adaptiveGenerationSeconds + 45) * 1000, maxAttempts: 1 }); }
           catch (error) {
             if (error.message === '__SKIP_PRODUCT__') { this.recoveryContext = null; await this.checkpoint(); break roundLoop; }
+            if (error.message === '__CONTENT_POLICY_REFUSAL__') {
+              this.state.policyRefusalCount = (Number(this.state.policyRefusalCount) || 0) + 1;
+              ps.policyRefusalCount = (Number(ps.policyRefusalCount) || 0) + 1;
+              this.log(`检测到商品“${product.name}”当前对话被内容政策拒绝：立即放弃等待，不保存、不补图、不回查该对话，直接开启下一新对话`);
+              this.recoveryContext = null; this.watchRecoveryCount = 0; this.workflowRecoveryRequested = false; this.resetWatchdogSamples(); await this.checkpoint(); continue roundLoop;
+            }
             if (error.message !== '__GENERATION_TIMEOUT__' && error.message !== '__WORKFLOW_RECOVERY__') throw error;
             this.scheduler.record({ outcome: 'timeout', generationMs: Date.now() - this.recoveryContext.generationStartedAt, images: 0 }); await this.schedulerCheckpoint();
-            const deferred = await this.deferCurrentChat(this.recoveryContext, `在${adaptiveGenerationSeconds}秒内未检测到完整图片`);
+            const deferred = isBackgroundTest ? { id: crypto.randomUUID(), url: browser.currentChatUrl || '', productId: product.id, round: nextRound, cycle: this.state.currentCycle, inputFingerprint, status: 'collecting', processedIndexes: [], ignoredAt: new Date().toISOString(), reason: `在${adaptiveGenerationSeconds}秒内未检测到图片` } : await this.deferCurrentChat(this.recoveryContext, `在${adaptiveGenerationSeconds}秒内未检测到完整图片`);
             await this.finalRescanCurrentChatBeforeNextChat(this.recoveryContext, deferred, { initialTotal: deferred?.detectedTotal || 0 });
             this.log(`商品“${product.name}”在${adaptiveGenerationSeconds}秒内未生成完整图片，${deferred ? '已记录并最终复扫该对话后' : '当前对话地址尚未形成，仍将'}打开下一新对话`); this.recoveryContext = null; this.watchRecoveryCount = 0; this.workflowRecoveryRequested = false; await this.checkpoint(); continue roundLoop;
           }
           if (generationResult?.status === 'partial') {
             const total = generationResult.viewer?.total || 0;
             this.scheduler.record({ outcome: 'partial', generationMs: Date.now() - this.recoveryContext.generationStartedAt, images: total }); await this.schedulerCheckpoint();
-            const deferred = await this.deferCurrentChat(this.recoveryContext, `等待结束时仅生成${total}/5张`, { detectedTotal: total });
+            const deferred = isBackgroundTest ? { id: crypto.randomUUID(), url: browser.currentChatUrl || '', productId: product.id, round: nextRound, cycle: this.state.currentCycle, inputFingerprint, status: 'collecting', processedIndexes: [], detectedTotal: total, ignoredAt: new Date().toISOString(), reason: `当前对话生成${total}张` } : await this.deferCurrentChat(this.recoveryContext, `等待结束时仅生成${total}/5张`, { detectedTotal: total });
             if (deferred) await this.finalRescanCurrentChatBeforeNextChat(this.recoveryContext, deferred, { initialTotal: total });
             this.recoveryContext = null; this.watchRecoveryCount = 0; await this.checkpoint(); continue roundLoop;
           }
@@ -681,7 +725,7 @@ class TaskRunner extends EventEmitter {
           let currentEntry = (this.state.ignoredChats || []).find((item) => currentUrl && item.url === currentUrl);
           if (!currentEntry) {
             currentEntry = { id: crypto.randomUUID(), url: currentUrl, productId: product.id, round: nextRound, cycle: this.state.currentCycle, inputFingerprint, status: 'collecting', processedIndexes: [], ignoredAt: new Date().toISOString(), reason: '当前对话已完整生成' };
-            (this.state.ignoredChats ||= []).push(currentEntry);
+            if (!isBackgroundTest) (this.state.ignoredChats ||= []).push(currentEntry);
           }
           let added; let promoted;
           const rejectedBefore = this.state.qualityStats?.rejected || 0;
@@ -692,15 +736,17 @@ class TaskRunner extends EventEmitter {
             } catch (error) {
               currentEntry.status = 'pending'; currentEntry.nextCheckAt = new Date(Date.now() + 5 * 60000).toISOString(); await this.checkpoint(); throw error;
             }
-            if ((currentEntry.processedIndexes || []).length >= 5) { currentEntry.status = 'collected'; currentEntry.collectedAt = new Date().toISOString(); }
+            if ((isBackgroundTest && (currentEntry.processedIndexes || []).length >= Math.min(5, viewerInfo.total || 1)) || (currentEntry.processedIndexes || []).length >= 5) { currentEntry.status = 'collected'; currentEntry.collectedAt = new Date().toISOString(); }
             else currentEntry.status = 'pending';
             promoted = await this.promotePendingPool(this.recoveryContext);
           }
           finally { this.nativeSaveInFlight = false; this.resetWatchdogSamples(); }
-          const finalSweep = await this.finalRescanCurrentChatBeforeNextChat(this.recoveryContext, currentEntry, { initialTotal: viewerInfo.total || 0 });
-          added.push(...finalSweep.added); promoted.push(...finalSweep.promoted);
+          if ((currentEntry.processedIndexes || []).length < 5) {
+            const finalSweep = await this.finalRescanCurrentChatBeforeNextChat(this.recoveryContext, currentEntry, { initialTotal: viewerInfo.total || 0 });
+            added.push(...finalSweep.added); promoted.push(...finalSweep.promoted);
+          } else this.log('五个图片槽位已全部保存并校验通过，跳过多余最终复扫并立即准备下一对话');
           this.scheduler.record({ outcome: (currentEntry.processedIndexes || []).length >= 5 ? 'success' : 'partial', generationMs: Date.now() - this.recoveryContext.generationStartedAt, images: added.length, qualityRejected: (this.state.qualityStats?.rejected || 0) - rejectedBefore }); await this.schedulerCheckpoint();
-          roundCommitted = ps.round > roundAtStart; this.recoveryContext = null;
+          roundCommitted = ps.round > roundAtStart; this.recoveryContext = null; this.resetSafetyFailures();
           this.log(`当前完整对话向统一暂存池新增${added.length}张，本次转入正式目录${promoted.length}张；暂存池剩余${ps.pendingPool.length}张`);
           await this.checkpoint();
           if (ps.completed < 50 && this.state.waitEnabled) {
@@ -738,10 +784,15 @@ class TaskRunner extends EventEmitter {
               if (!ignoredChats.some((item) => item.url === failedUrl)) ignoredChats.push({ id: crypto.randomUUID(), url: failedUrl, productId: product.id, round: roundAtStart + 1, cycle: this.state.currentCycle, inputFingerprint: this.recoveryContext.inputFingerprint, status: 'pending', processedIndexes: [], ignoredAt: new Date().toISOString(), reason: error.message });
             }
             this.recoveryContext = null; this.watchRecoveryCount = 0; this.resetWatchdogSamples();
-            this.log(`自动恢复可解决故障：${error.message}；正在刷新页面并打开新对话继续，不暂停任务`);
+            this.log(`当前轮次异常：${error.message}；已保存断点并进入有界恢复判断`);
             await this.checkpoint();
-            if (savePageRecovered) { this.log('保存失败界面已自动关闭并返回ChatGPT，立即用新对话继续'); continue roundLoop; }
-            await this.recoverToFreshChatPage(error.message); continue roundLoop;
+            if (this.isSecurityOrLoginError(error)) { await this.enterSafetyHold(`检测到登录或安全验证异常：${error.message}`); await this.waitIfPaused(); continue roundLoop; }
+            const safetyFailures = this.recordSafetyFailure(error.message); await this.checkpoint();
+            if (savePageRecovered && safetyFailures < 2) { this.log('保存失败界面已关闭并返回ChatGPT；本次只开启新对话，不刷新页面'); continue roundLoop; }
+            if (safetyFailures >= 2) { await this.enterSafetyHold(`15分钟内连续${safetyFailures}次页面、上传或保存异常：${error.message}`); await this.waitIfPaused(); continue roundLoop; }
+            const recovered = await this.recoverToFreshChatPage(error.message);
+            if (!recovered) { await this.enterSafetyHold(`唯一一次页面恢复失败：${error.message}`); await this.waitIfPaused(); }
+            continue roundLoop;
           }
         }
         if (ps.completed >= 50) this.log(`产品“${product.name}”已完成50张`);
@@ -751,33 +802,30 @@ class TaskRunner extends EventEmitter {
       if (this.state.currentCycle > this.state.totalCycles) break cycleLoop;
       const nextLayout = await allocateRunLayout(outputs, validProducts.map((item) => item.name));
       this.state.runOutputDir = nextLayout.runDir; this.state.runOutputDirs ||= []; this.state.runOutputDirs.push(nextLayout.runDir); this.state.currentProduct = 0; this.state.products = {}; this.state.skippedProducts = [];
-      for (const product of validProducts) this.state.products[product.id] = { outputDir: nextLayout.productDirs[product.name], completed: 0, round: 0, chatAttempts: 0, hashes: [], thumbnailProgress: {}, pendingPool: [] };
+      for (const product of validProducts) this.state.products[product.id] = { outputDir: nextLayout.productDirs[product.name], completed: 0, round: 0, chatAttempts: 0, hashes: [], rejectedHashes: [], thumbnailProgress: {}, pendingPool: [] };
       await this.checkpoint();
       }
       this.state.status = 'completed'; await this.checkpoint(); this.emitStatus({ phase: '已完成', message: '所有产品处理完成' });
     } catch (error) {
       if (error.message === '__STOPPED__' || this.stopped) this.emitStatus({ phase: '已停止' });
       else if (finalProtectionEligible && this.isRateLimited(error)) {
-        fatalReason = error.message; restartAfterFatal = true;
+        fatalReason = error.message;
         if (this.state) this.state.status = 'cooldown';
-        await this.checkpoint().catch(() => {}); await this.cooldownForRateLimit(error.message); await this.recoverAfterRateLimitCooldown('任务外层捕获到限流');
-      } else if (finalProtectionEligible) {
-        fatalReason = error.message; restartAfterFatal = true;
-        if (this.state) this.state.status = 'recovering';
-        this.log(`最终保护已触发：任务遇到未处理异常但不会停止。正在关闭全部Edge窗口并重新打开ChatGPT：${fatalReason}`);
         await this.checkpoint().catch(() => {});
-        try { await this.browser.restartEdgeAndOpenChatGPT(); this.log('最终保护已重新打开Edge并进入ChatGPT，将从断点自动继续'); }
-        catch (restartError) { this.log(`最终保护已重新启动Edge，但ChatGPT尚未恢复可用；仍会继续从断点重试：${restartError.message}`); }
+        try { await this.cooldownForRateLimit(error.message); await this.recoverAfterRateLimitCooldown('任务外层捕获到限流'); restartAfterManualResume = true; }
+        catch (recoveryError) { await this.enterSafetyHold(`限流冷却后仍无法安全恢复：${recoveryError.message}`); await this.waitIfPaused(); restartAfterManualResume = !this.stopped; }
+      } else if (finalProtectionEligible) {
+        fatalReason = error.message;
+        await this.enterSafetyHold(`任务遇到未处理异常，已禁止自动关闭或重启Edge：${fatalReason}`);
+        await this.waitIfPaused(); restartAfterManualResume = !this.stopped;
       } else {
         this.pause(`任务启动异常：${error.message}`);
         if (this.state) this.state.status = 'failed'; await this.checkpoint().catch(() => {});
       }
     } finally { this.stopWatchdog(); await this.browser?.close(); this.browser = null; this.running = false; this.emitStatus(); }
-    if (restartAfterFatal && !this.stopped) {
-      const restartCount = Math.max(0, Number(options._fatalRestartCount) || 0) + 1;
-      this.log(`最终保护将在3秒后自动继续上次任务（第${restartCount}次异常重启）`);
-      await sleep(3000);
-      return this.start(root, 'continue', { ...options, _fatalRestartCount: restartCount });
+    if (restartAfterManualResume && !this.stopped) {
+      this.log('人工确认已完成，软件将从保存的断点继续；不会自动关闭或重启Edge');
+      return this.start(root, 'continue', options);
     }
   }
 }

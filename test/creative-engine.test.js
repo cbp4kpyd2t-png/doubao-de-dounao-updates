@@ -156,6 +156,24 @@ test('round prompt locks five outputs to five positions from one contact sheet',
   assert.match(prompt, /禁止融合\/镜像\/拼接/);
 });
 
+test('超长创意先压缩可选镜头文字并完整保留结构锁与五图规则', () => {
+  const tasks = Array.from({ length: 5 }, (_, index) => ({
+    slot: index + 1, round: 1,
+    angle: { productOrientation: '向右旋转非常明显的复杂观察角度', cameraDirection: '从人物左后方采用很长的摄影机位说明' },
+    scene: '包含大量欧式豪华家具与复杂空间关系的高级住宅场景',
+    action: '人物正在自然使用商品并完整展示所有重要结构细节',
+    spatialRelation: '商品始终位于人物前方且不得被任何物体遮挡',
+  }));
+  const plan = { tasks, vocabularyRules: { locks: ['十六个孔位严格四乘四排列', '后端横梁与两侧三角连接块完整'], personLocks: ['五张不同正脸'], fixedWords: ['一板一件衣物'], blocks: ['禁止变成竖立层架', '禁止减少孔位'] } };
+  const prompt = buildRoundPrompt({ productName: '叠衣板', quantity: 15 }, plan, 1, '这是很长的补充要求，需要保持商品结构并突出主体，同时允许豪华场景和人物互动');
+  assert.ok(prompt.length <= FINAL_PROMPT_MAX_LENGTH);
+  assert.match(prompt, /十六个孔位严格四乘四排列/);
+  assert.match(prompt, /一板一件衣物/);
+  assert.match(prompt, /禁止变成竖立层架/);
+  assert.ok(prompt.includes(FIXED_FIVE_IMAGE_PROMPT));
+  assert.equal((prompt.match(/图片\d：/g) || []).length, 5);
+});
+
 test('unchanged sources are reused; changed sources archive the previous managed version', async () => {
   const item = await fixture('收纳盒主图', '一个便携收纳盒。');
   const first = await prepareProductCreativeFiles(item.product, { cycle: 1 });

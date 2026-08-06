@@ -17,3 +17,10 @@ test('中途切换步骤会保留被替代步骤且失败带恢复动作', () =>
   failWorkflow(state, new Error('损坏'), '跳过候选');
   assert.equal(state.workflow.current, null); assert.equal(state.workflow.history.at(-1).recoveryAction, '跳过候选'); assert.equal(state.workflow.recoveryCount, 1);
 });
+
+test('最终复扫是显式持久化步骤', () => {
+  const state = { runId: 'r2' };
+  const step = transitionWorkflow(state, '最终复扫', { productId: 'p1', round: 3 });
+  assert.equal(step.recovery, '保留缩略图断点并开启下一对话');
+  assert.equal(step.timeoutMs, 360000);
+});

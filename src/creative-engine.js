@@ -301,12 +301,15 @@ function completePromptPart(value, maxLength, fallback = '') {
   return result || fallback;
 }
 
-function taskPrompt(task) {
+function taskPrompt(task, mode = 'normal') {
   const a = task.angle;
   const sceneFallbacks = ['住宅主场景', '窗边生活区', '专业使用区', '室内展示区', '户外生活区'];
   const actionFallbacks = ['正面展示商品', '侧面观察商品', '整理使用空间', '展示核心用途', '完成使用后欣赏'];
-  const relation = completePromptPart(task.spatialRelation, 10, '');
-  return `图片${task.slot}：${completePromptPart(a.productOrientation, 8, '自然转向')}/${completePromptPart(a.cameraDirection, 10, '斜向机位')}；${completePromptPart(task.scene, 12, sceneFallbacks[task.slot - 1])}；${completePromptPart(task.action, 12, actionFallbacks[task.slot - 1])}${relation ? `；${relation}` : ''}`;
+  const limits = mode === 'ultra'
+    ? { orientation: 4, camera: 5, scene: 6, action: 6, relation: 0 }
+    : (mode === 'compact' ? { orientation: 6, camera: 7, scene: 8, action: 8, relation: 6 } : { orientation: 8, camera: 10, scene: 12, action: 12, relation: 10 });
+  const relation = limits.relation ? completePromptPart(task.spatialRelation, limits.relation, '') : '';
+  return `图片${task.slot}：${completePromptPart(a.productOrientation, limits.orientation, '转向')}/${completePromptPart(a.cameraDirection, limits.camera, '斜向机位')}；${completePromptPart(task.scene, limits.scene, sceneFallbacks[task.slot - 1])}；${completePromptPart(task.action, limits.action, actionFallbacks[task.slot - 1])}${relation ? `；${relation}` : ''}`;
 }
 
 function vocabularyRulesPrompt(plan) {
@@ -339,16 +342,14 @@ function angleLockPrompt(referenceSelection) {
 function buildRoundPrompt(facts, plan, round, globalRequirements = '', referenceSelection = null) {
   const selected = plan.tasks.filter((task) => task.round === round);
   if (selected.length !== 5) throw new Error(`第${round}轮创意任务不是5张`);
-  const prompt = [
-    taggedFactsPrompt(facts, plan),
-    vocabularyRulesPrompt(plan),
-    fixedWordsPrompt(plan),
-    angleLockPrompt(referenceSelection),
-    globalRequirements ? `补充：${completePromptPart(globalRequirements, 36, '保持商品真实并突出主体')}` : '',
-    `第${round}轮：`,
-    ...selected.map(taskPrompt),
-    FIXED_FIVE_IMAGE_PROMPT,
+  const assemble = (mode, globalLimit) => [
+    taggedFactsPrompt(facts, plan), vocabularyRulesPrompt(plan), fixedWordsPrompt(plan), angleLockPrompt(referenceSelection),
+    globalRequirements && globalLimit ? `补充：${completePromptPart(globalRequirements, globalLimit, '保持商品真实并突出主体')}` : '',
+    `第${round}轮：`, ...selected.map((task) => taskPrompt(task, mode)), FIXED_FIVE_IMAGE_PROMPT,
   ].filter(Boolean).join('\n');
+  let prompt = assemble('normal', 36);
+  if (prompt.length > FINAL_PROMPT_MAX_LENGTH) prompt = assemble('compact', 18);
+  if (prompt.length > FINAL_PROMPT_MAX_LENGTH) prompt = assemble('ultra', 8);
   if (prompt.length > FINAL_PROMPT_MAX_LENGTH) throw new Error(`最终提示词超过${FINAL_PROMPT_MAX_LENGTH}字：${prompt.length}`);
   return prompt;
 }
