@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.13",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.13/doubao-de-dounao-1.4.13-win-x64.zip",
-    "sha256":  "4d995cfa0dc1ebb3fa384b90a3d52f4790995c902c4da55ea89f9afc566fdeab",
-    "notes":  "Speeds up sequential image saving, keeps successful files when one thumbnail fails, shortens final rescans, repairs deferred-chat states, and verifies a real ChatGPT conversation URL before waiting for generation.",
-    "publishedAt":  "2026-08-03T10:36:37.8950546Z"
+    "version":  "1.4.14",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.14/doubao-de-dounao-1.4.14-win-x64.zip",
+    "sha256":  "58c109d7da3076ef5ba95d7ade91dd24c4fcb5d8d98c0b3a96f8e68dd6242259",
+    "notes":  "Adds a safety circuit breaker: login or security checks stop page actions immediately; repeated upload, save, or page recovery failures preserve the checkpoint and require manual confirmation; removes automatic Edge restarts and unbounded refresh loops.",
+    "publishedAt":  "2026-08-06T08:49:59.1939532Z"
 }
