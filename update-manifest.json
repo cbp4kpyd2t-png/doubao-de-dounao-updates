@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.16",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.16/doubao-de-dounao-1.4.16-win-x64.zip",
-    "sha256":  "2b5810c9c624c95850bcb9d7edb05d54b645952d02189b7a1e68525e155116ed",
-    "notes":  "Speeds up sequential image saving by removing unnecessary fixed waits, automatically applies bounded randomized recovery to transient save and page failures, and keeps immediate manual safety holds for real login or security verification.",
-    "publishedAt":  "2026-08-06T11:10:08.7690503Z"
+    "version":  "1.4.17",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.17/doubao-de-dounao-1.4.17-win-x64.zip",
+    "sha256":  "5f4c0853ee28bd3a16db9b0192fbd43ba3969a613917d276208ca8b881c6a94c",
+    "notes":  "Restores reference-image uploading on the latest ChatGPT interface by locating the attachment control beside the composer, accepting additional Chinese and English upload labels or a directly opened file picker, and automatically retrying transient upload-entry failures without manual safety holds.",
+    "publishedAt":  "2026-08-07T06:50:31.8117118Z"
 }
