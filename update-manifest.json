@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.17",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.17/doubao-de-dounao-1.4.17-win-x64.zip",
-    "sha256":  "5f4c0853ee28bd3a16db9b0192fbd43ba3969a613917d276208ca8b881c6a94c",
-    "notes":  "Restores reference-image uploading on the latest ChatGPT interface by locating the attachment control beside the composer, accepting additional Chinese and English upload labels or a directly opened file picker, and automatically retrying transient upload-entry failures without manual safety holds.",
-    "publishedAt":  "2026-08-07T06:50:31.8117118Z"
+    "version":  "1.4.18",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.18/doubao-de-dounao-1.4.18-win-x64.zip",
+    "sha256":  "d39c23d05cdc9de2a4b390bf858d46dd6684ec5791895585e0375d4fc0c5f580",
+    "notes":  "Hardens reference-image uploading by verifying Chat mode and the attachment entry before every upload, binding upload menus and file dialogs to the controlled Edge window, excluding unsent failed chats from image backchecks, and logging safe compatibility diagnostics for future ChatGPT interface changes.",
+    "publishedAt":  "2026-08-07T11:10:23.4304275Z"
 }
