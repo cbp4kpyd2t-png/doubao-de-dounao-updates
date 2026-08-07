@@ -72,6 +72,39 @@ function FindByName($root,$regex,$controlType=$null){
 }
 function FindByAutomationId($root,$id){ return $root.FindFirst([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id))) }
 function FindVisibleByAutomationId($root,$id){$matches=$root.FindAll([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id))); foreach($el in $matches){if(-not $el.Current.IsOffscreen -and $el.Current.IsEnabled){return $el}}; return $null}
+function FindAttachmentButtonNearComposer($pageRoot){
+  $composer=FindByAutomationId $pageRoot 'prompt-textarea';if(-not $composer){return $null};$cr=$composer.Current.BoundingRectangle;$candidates=@()
+  foreach($el in (All $pageRoot)){
+    try{
+      if($el.Current.IsOffscreen -or -not $el.Current.IsEnabled -or $el.Current.ControlType.ProgrammaticName -notmatch 'Button'){continue}
+      $r=$el.Current.BoundingRectangle;if($r.Width -lt 12 -or $r.Width -gt 100 -or $r.Height -lt 12 -or $r.Height -gt 100){continue}
+      $cx=$r.X+$r.Width/2;$cy=$r.Y+$r.Height/2
+      if($cx -lt ($cr.X-40) -or $cx -gt ($cr.X+130) -or $cy -lt ($cr.Y-35) -or $cy -gt ($cr.Y+$cr.Height+35)){continue}
+      $name=[string]$el.Current.Name;$id=[string]$el.Current.AutomationId;$priority=3
+      if($name -match "Attach files|Add photos|Upload|$uploadPhoto|$fromComputerUpload|$addPhotosFiles|$uploadFile|$addFile"){$priority=0}
+      elseif($id -eq 'composer-plus-btn'){$priority=1}
+      $distance=[Math]::Abs($cx-($cr.X+24))+[Math]::Abs($cy-($cr.Y+$cr.Height/2))
+      $candidates+=@{element=$el;priority=$priority;distance=$distance}
+    }catch{}
+  }
+  if(-not $candidates.Count){return $null}
+  return ($candidates|Sort-Object priority,distance|Select-Object -First 1).element
+}
+function FindVisibleUploadMenuItem($desktopRoot){
+  $pattern="Add photos and files|Upload from computer|Upload files?|Attach files?|Choose files?|Photos and files|^$addPhotosFiles$|^$fromComputerUpload$|^$uploadPhoto$|^$uploadFile$|^$selectFile$|^$addFile$|^$photosFiles$"
+  $matches=@()
+  foreach($el in (All $desktopRoot)){
+    try{
+      if($el.Current.IsOffscreen -or -not $el.Current.IsEnabled -or -not $el.Current.Name -or $el.Current.Name -notmatch $pattern){continue}
+      if($el.Current.ControlType.ProgrammaticName -notmatch 'Button|MenuItem|Text|Hyperlink'){continue}
+      $r=$el.Current.BoundingRectangle;if($r.Width -le 0 -or $r.Height -le 0){continue}
+      $priority=if($el.Current.ControlType.ProgrammaticName -match 'Button|MenuItem'){0}else{1}
+      $matches+=@{element=$el;priority=$priority;area=$r.Width*$r.Height}
+    }catch{}
+  }
+  if(-not $matches.Count){return $null}
+  return ($matches|Sort-Object priority,area|Select-Object -First 1).element
+}
 function FindNativeControl($root,$id,$classRegex){
   $matches=$root.FindAll([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id)))
   foreach($el in $matches){if(-not $el.Current.IsOffscreen -and $el.Current.IsEnabled -and $el.Current.ClassName -match $classRegex){return $el}}
@@ -481,6 +514,10 @@ $downloadWord=([char]0x4e0b)+([char]0x8f7d)
 $uploadPhoto=([char]0x4e0a)+([char]0x4f20)+([char]0x7167)+([char]0x7247)
 $fromComputerUpload=([char]0x4ece)+([char]0x7535)+([char]0x8111)+([char]0x4e0a)+([char]0x4f20)
 $addPhotosFiles=([char]0x6dfb)+([char]0x52a0)+([char]0x7167)+([char]0x7247)+([char]0x548c)+([char]0x6587)+([char]0x4ef6)
+$uploadFile=([char]0x4e0a)+([char]0x4f20)+([char]0x6587)+([char]0x4ef6)
+$selectFile=([char]0x9009)+([char]0x62e9)+([char]0x6587)+([char]0x4ef6)
+$addFile=([char]0x6dfb)+([char]0x52a0)+([char]0x6587)+([char]0x4ef6)
+$photosFiles=([char]0x7167)+([char]0x7247)+([char]0x548c)+([char]0x6587)+([char]0x4ef6)
 $openWord=([char]0x6253)+([char]0x5f00)
 $confirmWord=([char]0x786e)+([char]0x5b9a)
 $likeImage=([char]0x559c)+([char]0x6b22)+([char]0x6b64)+([char]0x56fe)+([char]0x7247)
@@ -666,13 +703,14 @@ if($Action -eq 'upload'){
   $existingFileName=FindVisibleByAutomationId ([Windows.Automation.AutomationElement]::RootElement) '1148'
   if($existingFileName){SubmitFileNames $existingFileName $quoted; $attached=WaitForAttachments $payload.files.Count; Result @{ok=($attached -ge $payload.files.Count);incomplete=($attached -lt $payload.files.Count);reusedPicker=$true;attachmentCount=$attached}}
   [Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 400
-  $add=FindByName $root 'Attach files|Add photos|Upload' 'Button'
-  if(-not $add){$add=FindByAutomationId $root 'composer-plus-btn'}
+  $add=FindAttachmentButtonNearComposer $root
+  if(-not $add){$add=FindByName $root 'Attach files|Add photos|Upload' 'Button'}
   if(-not $add){throw 'Attachment button was not found'}; ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800
-  $desktopRoot=[Windows.Automation.AutomationElement]::RootElement; $upload=$null
-  for($i=0;$i -lt 10;$i++){ $upload=FindByName $desktopRoot "Add photos and files|^$addPhotosFiles"; if($upload){break}; Start-Sleep -Milliseconds 200 }
-  if(-not $upload){ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800; $upload=FindByName $desktopRoot "Add photos and files|^$addPhotosFiles"}
-  if($upload){$uploadTarget=[Windows.Automation.TreeWalker]::RawViewWalker.GetParent($upload); if(-not $uploadTarget){$uploadTarget=$upload}; ClickElement $uploadTarget|Out-Null}else{throw 'Add photos and files menu item was not found'}
+  $desktopRoot=[Windows.Automation.AutomationElement]::RootElement; $upload=$null;$fileName=FindVisibleByAutomationId $desktopRoot '1148'
+  if(-not $fileName){for($i=0;$i -lt 12;$i++){ $upload=FindVisibleUploadMenuItem $desktopRoot; if($upload){break}; $fileName=FindVisibleByAutomationId $desktopRoot '1148';if($fileName){break}; Start-Sleep -Milliseconds 200 }}
+  if(-not $upload -and -not $fileName){ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800; $desktopRoot=[Windows.Automation.AutomationElement]::RootElement;$upload=FindVisibleUploadMenuItem $desktopRoot;$fileName=FindVisibleByAutomationId $desktopRoot '1148'}
+  if($upload){$uploadTarget=$upload;if($upload.Current.ControlType.ProgrammaticName -match 'Text'){$parent=[Windows.Automation.TreeWalker]::RawViewWalker.GetParent($upload);if($parent){$uploadTarget=$parent}};if(-not (InvokeElement $uploadTarget)){ClickElement $uploadTarget|Out-Null}}
+  elseif(-not $fileName){throw 'Compatible upload menu item was not found near the ChatGPT composer'}
   $fileName=$null
   for($i=0;$i -lt 20;$i++){ $fileName=FindVisibleByAutomationId ([Windows.Automation.AutomationElement]::RootElement) '1148'; if($fileName){break}; Start-Sleep -Milliseconds 250 }
   if($fileName){SubmitFileNames $fileName $quoted}

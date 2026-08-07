@@ -181,6 +181,19 @@ test('参考图一次提交全部路径并返回实际附件数量', () => {
   assert.doesNotMatch(upload, /if\(SelectFilesInOpenDialog \$payload\.files\)\{Result/);
 });
 
+test('上传入口按输入框位置定位并兼容新版中英文菜单名称', () => {
+  const upload = script.slice(script.indexOf("if($Action -eq 'upload')"), script.indexOf("if($Action -eq 'inspect-attach-menu')"));
+  assert.match(script, /function FindAttachmentButtonNearComposer/);
+  assert.match(script, /\$cx -lt \(\$cr\.X-40\).*\$cy -gt \(\$cr\.Y\+\$cr\.Height\+35\)/s);
+  assert.match(script, /function FindVisibleUploadMenuItem/);
+  assert.match(script, /Upload from computer\|Upload files\?\|Attach files\?\|Choose files\?/);
+  assert.match(script, /\$uploadFile=/);
+  assert.match(script, /\$selectFile=/);
+  assert.match(upload, /FindVisibleByAutomationId \$desktopRoot '1148'/);
+  assert.match(upload, /Compatible upload menu item was not found near the ChatGPT composer/);
+  assert.doesNotMatch(upload, /Add photos and files menu item was not found/);
+});
+
 test('附件不完整时支持删除全部附件后重传', () => {
   const clear = script.slice(script.indexOf("if($Action -eq 'clear-attachments')"), script.indexOf("if($Action -eq 'send')"));
   assert.match(clear, /CountComposerAttachments/); assert.match(clear, /ClickElement \$remove/); assert.match(clear, /remaining=\$remaining/);

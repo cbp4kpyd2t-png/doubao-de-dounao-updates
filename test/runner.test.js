@@ -221,9 +221,11 @@ test('轮次等待设置写入任务状态并可在断点继续时恢复', () =>
 test('可恢复故障采用随机冷却，十分钟内第三次页面异常才安全暂停', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8'); const automation = fs.readFileSync(require.resolve('../src/automation'), 'utf8');
   assert.match(source, /正在执行唯一一次ChatGPT页面恢复/);
-  assert.match(source, /10分钟内连续\$\{safetyFailures\}次页面或上传恢复异常/);
+  assert.match(source, /10分钟内连续\$\{safetyFailures\}次页面恢复异常/);
   assert.match(source, /waitForRecoveryJitter/);
   assert.match(source, /保存快速恢复/);
+  assert.match(source, /上传入口自动恢复/);
+  assert.match(source, /不进入人工安全暂停/);
   assert.match(source, /页面冷却恢复/);
   assert.match(source, /await this\.enterSafetyHold/);
   assert.doesNotMatch(source, /任务不会暂停；等待10秒后继续尝试/);
@@ -570,7 +572,7 @@ test('安全检查第一次出现就暂停，人工继续会清除熔断状态',
   assert.equal(runner.paused, false); assert.equal(runner.state.status, 'active'); assert.equal(runner.snapshot().safetyHold, false);
 });
 
-test('十分钟窗口内第三次页面故障达到安全暂停阈值，保存故障单独计数', () => {
+test('十分钟窗口内第三次页面故障达到安全暂停阈值，保存和上传故障单独计数', () => {
   const runner = new TaskRunner('user-data', 'downloads'); runner.state = {};
   assert.equal(runner.recordSafetyFailure('first'), 1);
   assert.equal(runner.recordSafetyFailure('second'), 2);
@@ -579,6 +581,9 @@ test('十分钟窗口内第三次页面故障达到安全暂停阈值，保存�
   assert.equal(runner.recordTransientSaveFailure('save-first'), 1);
   assert.equal(runner.recordTransientSaveFailure('save-second'), 2);
   assert.equal(runner.state.safety.saveRecoveryFailures, 2);
+  assert.equal(runner.recordTransientUploadFailure('upload-first'), 1);
+  assert.equal(runner.recordTransientUploadFailure('upload-second'), 2);
+  assert.equal(runner.state.safety.uploadRecoveryFailures, 2);
 });
 
 test('随机恢复等待支持零时长确定性测试且不会触发人工暂停', async () => {

@@ -31,15 +31,15 @@ class TaskRunner extends EventEmitter {
   emitStatus(extra = {}) { if (extra.phase && extra.phase !== this.currentPhase) { this.currentPhase = extra.phase; this.resetWatchdogSamples(); } this.emit('status', this.snapshot({ currentCycle: this.state?.currentCycle || 0, totalCycles: this.state?.totalCycles || 1, ...extra })); }
   log(message) { const line = `[${new Date().toLocaleString('zh-CN')}] ${message}`; this.emit('log', line); if (this.logFile) fs.appendFileSync(this.logFile, `${line}\r\n`, 'utf8'); }
   pause(reason = '用户暂停', showAlert = reason !== '用户暂停') { this.paused = true; if (this.state) this.state.status = 'paused'; this.checkpoint().catch(() => {}); this.log(reason); this.emitStatus({ phase: '已暂停', message: reason }); if (showAlert) this.emit('alert', { title: '任务需要处理', message: reason }); }
-  resume() { if (!this.running) return; const safety = this.ensureSafetyState(); if (safety.status === 'hold') { this.log(`用户已确认处理安全暂停：${safety.reason || '页面异常'}`); safety.status = 'ready'; safety.reason = null; safety.heldAt = null; safety.holdUntil = null; safety.manualResumeRequired = false; safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; safety.saveRecoveryFailures = 0; safety.saveFailureWindowStartedAt = null; } this.paused = false; this.workflowRecoveryRequested = false; this.resetWatchdogSamples(); if (this.state) this.state.status = 'active'; this.checkpoint().catch(() => {}); this.log('任务继续'); this.emitStatus({ phase: '继续中' }); }
+  resume() { if (!this.running) return; const safety = this.ensureSafetyState(); if (safety.status === 'hold') { this.log(`用户已确认处理安全暂停：${safety.reason || '页面异常'}`); safety.status = 'ready'; safety.reason = null; safety.heldAt = null; safety.holdUntil = null; safety.manualResumeRequired = false; safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; safety.saveRecoveryFailures = 0; safety.saveFailureWindowStartedAt = null; safety.uploadRecoveryFailures = 0; safety.uploadFailureWindowStartedAt = null; } this.paused = false; this.workflowRecoveryRequested = false; this.resetWatchdogSamples(); if (this.state) this.state.status = 'active'; this.checkpoint().catch(() => {}); this.log('任务继续'); this.emitStatus({ phase: '继续中' }); }
   stop() { this.stopped = true; this.paused = false; if (this.state) this.state.status = 'stopped'; this.checkpoint().catch(() => {}); this.log('任务将在当前安全步骤后停止'); }
   async shutdown() { this.stopWatchdog(); this.stop(); await this.checkpoint().catch(() => {}); await this.browser?.close(); this.browser = null; }
   async checkpoint() { if (this.stateFile && this.state) await atomicWriteJson(this.stateFile, this.state); }
   async waitIfPaused() { while (this.paused && !this.stopped) await sleep(500); if (this.stopped) throw new Error('__STOPPED__'); }
   ensureSafetyState() {
     if (!this.state) return { status: 'ready', recoveryFailures: 0 };
-    this.state.safety ||= { version: 2, status: 'ready', recoveryFailures: 0, failureWindowStartedAt: null, saveRecoveryFailures: 0, saveFailureWindowStartedAt: null, reason: null, heldAt: null, holdUntil: null, manualResumeRequired: false };
-    this.state.safety.version = Math.max(2, Number(this.state.safety.version) || 1);
+    this.state.safety ||= { version: 3, status: 'ready', recoveryFailures: 0, failureWindowStartedAt: null, saveRecoveryFailures: 0, saveFailureWindowStartedAt: null, uploadRecoveryFailures: 0, uploadFailureWindowStartedAt: null, reason: null, heldAt: null, holdUntil: null, manualResumeRequired: false };
+    this.state.safety.version = Math.max(3, Number(this.state.safety.version) || 1);
     return this.state.safety;
   }
   isSecurityOrLoginError(error) { return /__LOGIN_REQUIRED__|__SECURITY|验证码|安全检查|安全验证|登录入口|退出登录|账号.*(?:停用|封禁|禁用)|account.*(?:deactivat|suspend|block)|verify you are human/i.test(String(error?.message || error || '')); }
@@ -55,9 +55,16 @@ class TaskRunner extends EventEmitter {
     safety.saveRecoveryFailures = Math.max(0, Number(safety.saveRecoveryFailures) || 0) + 1; safety.lastSaveFailureAt = new Date(now).toISOString(); safety.lastSaveFailure = String(reason || '保存界面异常');
     return safety.saveRecoveryFailures;
   }
+  recordTransientUploadFailure(reason) {
+    const safety = this.ensureSafetyState(); const now = Date.now(); const started = Date.parse(safety.uploadFailureWindowStartedAt || '');
+    if (!Number.isFinite(started) || now - started > 10 * 60000) { safety.uploadFailureWindowStartedAt = new Date(now).toISOString(); safety.uploadRecoveryFailures = 0; }
+    safety.uploadRecoveryFailures = Math.max(0, Number(safety.uploadRecoveryFailures) || 0) + 1; safety.lastUploadFailureAt = new Date(now).toISOString(); safety.lastUploadFailure = String(reason || '上传界面异常');
+    return safety.uploadRecoveryFailures;
+  }
   resetSafetyFailures() {
     const safety = this.ensureSafetyState(); safety.recoveryFailures = 0; safety.failureWindowStartedAt = null; safety.lastFailure = null;
     safety.saveRecoveryFailures = 0; safety.saveFailureWindowStartedAt = null; safety.lastSaveFailure = null;
+    safety.uploadRecoveryFailures = 0; safety.uploadFailureWindowStartedAt = null; safety.lastUploadFailure = null;
   }
   async waitForRecoveryJitter(label, minSeconds, maxSeconds, random = Math.random) {
     const delayMs = randomDelayMs(random, minSeconds, maxSeconds); const seconds = Math.max(0, Math.ceil(delayMs / 1000)); const until = Date.now() + delayMs;
@@ -768,6 +775,7 @@ class TaskRunner extends EventEmitter {
           } catch (error) {
             this.nativeSaveInFlight = false;
             const savePageRecovered = error.message.startsWith('__SAVE_FAILED_RECOVERED__');
+            const uploadRetryExhausted = error.message.startsWith('__UPLOAD_RETRY_EXHAUSTED__');
             if (error.message === '__STOPPED__') throw error;
             if (error.message === '__RATE_LIMIT_RESTART__') {
               const limitedUrl = await browser.getCurrentChatUrl().catch(() => null);
@@ -797,6 +805,12 @@ class TaskRunner extends EventEmitter {
             this.log(`当前轮次异常：${error.message}；已保存断点并进入有界恢复判断`);
             await this.checkpoint();
             if (this.isSecurityOrLoginError(error)) { await this.enterSafetyHold(`检测到登录或安全验证异常：${error.message}`); await this.waitIfPaused(); continue roundLoop; }
+            if (uploadRetryExhausted) {
+              const uploadFailures = this.recordTransientUploadFailure(error.message); await this.checkpoint();
+              await this.waitForRecoveryJitter(`上传入口自动恢复（第${uploadFailures}次）`, uploadFailures <= 1 ? 4 : (uploadFailures === 2 ? 8 : 15), uploadFailures <= 1 ? 8 : (uploadFailures === 2 ? 15 : 30));
+              this.log('参考图上传入口暂时不可用；已保留任务断点，将重新打开新对话再定位上传按钮，不进入人工安全暂停');
+              continue roundLoop;
+            }
             if (savePageRecovered) {
               const saveFailures = this.recordTransientSaveFailure(error.message); await this.checkpoint();
               const shortRecovery = saveFailures <= 1;
@@ -805,7 +819,7 @@ class TaskRunner extends EventEmitter {
               continue roundLoop;
             }
             const safetyFailures = this.recordSafetyFailure(error.message); await this.checkpoint();
-            if (safetyFailures >= 3) { await this.enterSafetyHold(`10分钟内连续${safetyFailures}次页面或上传恢复异常：${error.message}`); await this.waitIfPaused(); continue roundLoop; }
+            if (safetyFailures >= 3) { await this.enterSafetyHold(`10分钟内连续${safetyFailures}次页面恢复异常：${error.message}`); await this.waitIfPaused(); continue roundLoop; }
             await this.waitForRecoveryJitter(`页面冷却恢复（第${safetyFailures}次）`, 15, 35);
             const recovered = await this.recoverToFreshChatPage(error.message);
             if (!recovered) {
