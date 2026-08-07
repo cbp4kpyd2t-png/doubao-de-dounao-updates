@@ -90,20 +90,58 @@ function FindAttachmentButtonNearComposer($pageRoot){
   if(-not $candidates.Count){return $null}
   return ($candidates|Sort-Object priority,distance|Select-Object -First 1).element
 }
-function FindVisibleUploadMenuItem($desktopRoot){
+function FindVisibleUploadMenuItem($pageRoot){
   $pattern="Add photos and files|Upload from computer|Upload files?|Attach files?|Choose files?|Photos and files|^$addPhotosFiles$|^$fromComputerUpload$|^$uploadPhoto$|^$uploadFile$|^$selectFile$|^$addFile$|^$photosFiles$"
-  $matches=@()
-  foreach($el in (All $desktopRoot)){
+  $composer=FindByAutomationId $pageRoot 'prompt-textarea';if(-not $composer){return $null};$cr=$composer.Current.BoundingRectangle;$matches=@()
+  foreach($el in (All $pageRoot)){
     try{
       if($el.Current.IsOffscreen -or -not $el.Current.IsEnabled -or -not $el.Current.Name -or $el.Current.Name -notmatch $pattern){continue}
       if($el.Current.ControlType.ProgrammaticName -notmatch 'Button|MenuItem|Text|Hyperlink'){continue}
       $r=$el.Current.BoundingRectangle;if($r.Width -le 0 -or $r.Height -le 0){continue}
+      $cx=$r.X+$r.Width/2;$cy=$r.Y+$r.Height/2
+      if($cx -lt ($cr.X-160) -or $cx -gt ($cr.X+$cr.Width+260) -or $cy -lt ($cr.Y-560) -or $cy -gt ($cr.Y+$cr.Height+180)){continue}
       $priority=if($el.Current.ControlType.ProgrammaticName -match 'Button|MenuItem'){0}else{1}
-      $matches+=@{element=$el;priority=$priority;area=$r.Width*$r.Height}
+      $distance=[Math]::Abs($cx-($cr.X+80))+[Math]::Abs($cy-$cr.Y)
+      $matches+=@{element=$el;priority=$priority;distance=$distance;area=$r.Width*$r.Height}
     }catch{}
   }
   if(-not $matches.Count){return $null}
-  return ($matches|Sort-Object priority,area|Select-Object -First 1).element
+  return ($matches|Sort-Object priority,distance,area|Select-Object -First 1).element
+}
+function FindChatModeTab($pageRoot){
+  $wr=$pageRoot.Current.BoundingRectangle;$matches=@()
+  foreach($el in (All $pageRoot)){
+    try{
+      if($el.Current.IsOffscreen -or -not $el.Current.IsEnabled -or $el.Current.Name -notmatch '^(Chat|聊天)$'){continue}
+      if($el.Current.ControlType.ProgrammaticName -notmatch 'Button|TabItem|RadioButton|Text'){continue}
+      $r=$el.Current.BoundingRectangle;if($r.Width -le 0 -or $r.Height -le 0){continue};$cx=$r.X+$r.Width/2;$cy=$r.Y+$r.Height/2
+      if($cx -lt ($wr.X+$wr.Width*0.2) -or $cx -gt ($wr.X+$wr.Width*0.8) -or $cy -lt ($wr.Y+30) -or $cy -gt ($wr.Y+320)){continue}
+      $priority=if($el.Current.ControlType.ProgrammaticName -match 'Button|TabItem|RadioButton'){0}else{1};$matches+=@{element=$el;priority=$priority;y=$r.Y}
+    }catch{}
+  }
+  if(-not $matches.Count){return $null};return ($matches|Sort-Object priority,y|Select-Object -First 1).element
+}
+function EnsureChatModeAndAttachment($pageRoot){
+  $chatTab=FindChatModeTab $pageRoot
+  if($chatTab){$target=$chatTab;if($chatTab.Current.ControlType.ProgrammaticName -match 'Text'){$parent=[Windows.Automation.TreeWalker]::RawViewWalker.GetParent($chatTab);if($parent){$target=$parent}};InvokeElement $target|Out-Null;Start-Sleep -Milliseconds 700
+    for($i=0;$i -lt 16;$i++){$pageRoot=Root;$composer=FindByAutomationId $pageRoot 'prompt-textarea';$attachment=if($composer){FindAttachmentButtonNearComposer $pageRoot}else{$null};if($composer -and $attachment){return @{ok=$true;switched=$true;chatTabFound=$true}};Start-Sleep -Milliseconds 250}
+  }
+  $composer=FindByAutomationId $pageRoot 'prompt-textarea';$attachment=if($composer){FindAttachmentButtonNearComposer $pageRoot}else{$null}
+  if($composer -and $attachment){return @{ok=$true;switched=$false;chatTabFound=$false}}
+  return @{ok=$false;switched=$false;chatTabFound=[bool]$chatTab}
+}
+function FindVisibleEdgeOpenDialog(){
+  $edge=EdgeProcess;if(-not $edge){return $null};$desktop=[Windows.Automation.AutomationElement]::RootElement
+  foreach($window in $desktop.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition)){
+    try{if($window.Current.ProcessId -eq $edge.Id -and -not $window.Current.IsOffscreen -and $window.Current.ControlType.ProgrammaticName -match 'Window' -and $window.Current.Name -match "^Open$|^$openWord$"){return $window}}catch{}
+  }
+  return $null
+}
+function FindVisibleEdgeOpenFileNameField(){ $dialog=FindVisibleEdgeOpenDialog;if(-not $dialog){return $null};return FindVisibleByAutomationId $dialog '1148' }
+function GetUploadCompatibilitySummary($pageRoot){
+  $composer=FindByAutomationId $pageRoot 'prompt-textarea';$attachment=if($composer){FindAttachmentButtonNearComposer $pageRoot}else{$null};$chat=FindChatModeTab $pageRoot;$near=@()
+  if($composer){$cr=$composer.Current.BoundingRectangle;foreach($el in (All $pageRoot)){try{$r=$el.Current.BoundingRectangle;$cx=$r.X+$r.Width/2;$cy=$r.Y+$r.Height/2;if(-not $el.Current.IsOffscreen -and $el.Current.ControlType.ProgrammaticName -match 'Button|MenuItem|TabItem' -and $cx -ge ($cr.X-180) -and $cx -le ($cr.X+$cr.Width+260) -and $cy -ge ($cr.Y-560) -and $cy -le ($cr.Y+$cr.Height+180)){$label=([string]$el.Current.Name).Replace('|','/');$id=([string]$el.Current.AutomationId).Replace('|','/');$near+="${label}#${id}";if($near.Count -ge 12){break}}}catch{}}}
+  return "composer=$([bool]$composer);attachment=$([bool]$attachment);chatTab=$([bool]$chat);edgeDialog=$([bool](FindVisibleEdgeOpenDialog));near=$([string]::Join('|',$near))"
 }
 function FindNativeControl($root,$id,$classRegex){
   $matches=$root.FindAll([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id)))
@@ -112,7 +150,7 @@ function FindNativeControl($root,$id,$classRegex){
 }
 function SubmitFileNames($fileName,$quoted){try{$fileName.SetFocus()}catch{ClickElement $fileName|Out-Null}; Start-Sleep -Milliseconds 250; try{$value=$fileName.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern); $value.SetValue($quoted)}catch{SetClipboardText $quoted; [Windows.Forms.SendKeys]::SendWait('^a'); [Windows.Forms.SendKeys]::SendWait('^v')}; Start-Sleep -Milliseconds 250; [Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 300}
 function SelectFilesInOpenDialog($files){
-  $desktop=[Windows.Automation.AutomationElement]::RootElement; $dialog=FindByName $desktop "^Open$|^$openWord$" 'Window'; if(-not $dialog){return $false}
+  $dialog=FindVisibleEdgeOpenDialog; if(-not $dialog){return $false}
   $selected=0
   foreach($file in $files){$name=[IO.Path]::GetFileName($file); $stem=[IO.Path]::GetFileNameWithoutExtension($file); $item=$null; foreach($el in (All $dialog)){if(-not $el.Current.IsOffscreen -and $el.Current.Name -in @($name,$stem) -and $el.Current.ControlType.ProgrammaticName -match 'ListItem|DataItem'){$item=$el;break}}; if(-not $item){continue}; try{$pattern=$item.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern); if($selected -eq 0){$pattern.Select()}else{$pattern.AddToSelection()}; $selected++}catch{ClickElement $item|Out-Null}}
   if($selected -lt $files.Count){return $false}; $open=FindByName $dialog "^Open|^$openWord" 'Button'; if(-not $open){$open=FindVisibleByAutomationId $dialog '1'}; if(-not $open){return $false}; InvokeElement $open|Out-Null; Start-Sleep -Milliseconds 300; return $true
@@ -628,7 +666,8 @@ if($Action -eq 'new-chat'){
   for($attempt=0;$attempt -lt 10;$attempt++){ $removeButtons=@(); foreach($el in (All (Root))){$r=$el.Current.BoundingRectangle;if(-not $el.Current.IsOffscreen -and $r.Width -gt 0 -and $r.Height -gt 0 -and $composerRect -and $r.Y -ge ($composerRect.Y-200) -and $r.Y -le ($composerRect.Y+$composerRect.Height+50) -and $el.Current.Name -match "Remove file|^$removeFile" -and $el.Current.ControlType.ProgrammaticName -match 'Button'){$removeButtons+=$el}}; if(-not $removeButtons.Count){break}; ClickElement $removeButtons[0]|Out-Null; Start-Sleep -Milliseconds 350 }
   if($composer){try{$composer.SetFocus();[Windows.Forms.SendKeys]::SendWait('^a');[Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')}catch{}}
   Start-Sleep -Milliseconds 500; $freshRoot=Root; $attachments=0; foreach($el in (All $freshRoot)){$r=$el.Current.BoundingRectangle;if(-not $el.Current.IsOffscreen -and $r.Width -gt 0 -and $r.Height -gt 0 -and $composerRect -and $r.Y -ge ($composerRect.Y-200) -and $r.Y -le ($composerRect.Y+$composerRect.Height+50) -and $el.Current.Name -match "Remove file|^$removeFile" -and $el.Current.ControlType.ProgrammaticName -match 'Button'){$attachments++}}
-  Result @{ok=[bool]$composer;attachmentCount=$attachments}
+  $mode=EnsureChatModeAndAttachment $freshRoot
+  Result @{ok=[bool]$composer;attachmentCount=$attachments;attachmentReady=$mode.ok;modeSwitched=$mode.switched;chatTabFound=$mode.chatTabFound;diagnostic=(GetUploadCompatibilitySummary (Root))}
 }
 if($Action -eq 'clear-attachments'){
   for($attempt=0;$attempt -lt 30;$attempt++){
@@ -700,19 +739,21 @@ if($Action -eq 'read-marked-response'){
 }
 if($Action -eq 'upload'){
   $quoted=($payload.files|ForEach-Object{'"'+$_+'"'}) -join ' '
-  $existingFileName=FindVisibleByAutomationId ([Windows.Automation.AutomationElement]::RootElement) '1148'
+  $root=Root;$mode=EnsureChatModeAndAttachment $root;$root=Root
+  if(-not $mode.ok){throw "__UPLOAD_ENTRY_NOT_READY__:Chat mode or attachment entry was not ready; $(GetUploadCompatibilitySummary $root)"}
+  $existingFileName=FindVisibleEdgeOpenFileNameField
   if($existingFileName){SubmitFileNames $existingFileName $quoted; $attached=WaitForAttachments $payload.files.Count; Result @{ok=($attached -ge $payload.files.Count);incomplete=($attached -lt $payload.files.Count);reusedPicker=$true;attachmentCount=$attached}}
   [Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 400
   $add=FindAttachmentButtonNearComposer $root
   if(-not $add){$add=FindByName $root 'Attach files|Add photos|Upload' 'Button'}
-  if(-not $add){throw 'Attachment button was not found'}; ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800
-  $desktopRoot=[Windows.Automation.AutomationElement]::RootElement; $upload=$null;$fileName=FindVisibleByAutomationId $desktopRoot '1148'
-  if(-not $fileName){for($i=0;$i -lt 12;$i++){ $upload=FindVisibleUploadMenuItem $desktopRoot; if($upload){break}; $fileName=FindVisibleByAutomationId $desktopRoot '1148';if($fileName){break}; Start-Sleep -Milliseconds 200 }}
-  if(-not $upload -and -not $fileName){ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800; $desktopRoot=[Windows.Automation.AutomationElement]::RootElement;$upload=FindVisibleUploadMenuItem $desktopRoot;$fileName=FindVisibleByAutomationId $desktopRoot '1148'}
+  if(-not $add){throw "__UPLOAD_ENTRY_NOT_READY__:Attachment button was not found; $(GetUploadCompatibilitySummary $root)"}; ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800
+  $upload=$null;$fileName=FindVisibleEdgeOpenFileNameField
+  if(-not $fileName){for($i=0;$i -lt 12;$i++){ $upload=FindVisibleUploadMenuItem $root; if($upload){break}; $fileName=FindVisibleEdgeOpenFileNameField;if($fileName){break}; Start-Sleep -Milliseconds 200 }}
+  if(-not $upload -and -not $fileName){ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800; $root=Root;$upload=FindVisibleUploadMenuItem $root;$fileName=FindVisibleEdgeOpenFileNameField}
   if($upload){$uploadTarget=$upload;if($upload.Current.ControlType.ProgrammaticName -match 'Text'){$parent=[Windows.Automation.TreeWalker]::RawViewWalker.GetParent($upload);if($parent){$uploadTarget=$parent}};if(-not (InvokeElement $uploadTarget)){ClickElement $uploadTarget|Out-Null}}
-  elseif(-not $fileName){throw 'Compatible upload menu item was not found near the ChatGPT composer'}
+  elseif(-not $fileName){throw "__UPLOAD_ENTRY_NOT_READY__:Compatible upload menu item was not found near the ChatGPT composer; $(GetUploadCompatibilitySummary $root)"}
   $fileName=$null
-  for($i=0;$i -lt 20;$i++){ $fileName=FindVisibleByAutomationId ([Windows.Automation.AutomationElement]::RootElement) '1148'; if($fileName){break}; Start-Sleep -Milliseconds 250 }
+  for($i=0;$i -lt 20;$i++){ $fileName=FindVisibleEdgeOpenFileNameField; if($fileName){break}; Start-Sleep -Milliseconds 250 }
   if($fileName){SubmitFileNames $fileName $quoted}
   elseif(-not (SelectFilesInOpenDialog $payload.files)){SetClipboardText $quoted; [Windows.Forms.SendKeys]::SendWait('%n'); Start-Sleep -Milliseconds 250; [Windows.Forms.SendKeys]::SendWait('^a'); [Windows.Forms.SendKeys]::SendWait('^v'); [Windows.Forms.SendKeys]::SendWait('{ENTER}')}
   $attached=WaitForAttachments $payload.files.Count

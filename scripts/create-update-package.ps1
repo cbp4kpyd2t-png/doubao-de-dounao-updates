@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Restores reference-image uploading on the latest ChatGPT interface by locating the attachment control beside the composer, accepting additional Chinese and English upload labels or a directly opened file picker, and automatically retrying transient upload-entry failures without manual safety holds.'
+  notes = 'Hardens reference-image uploading by verifying Chat mode and the attachment entry before every upload, binding upload menus and file dialogs to the controlled Edge window, excluding unsent failed chats from image backchecks, and logging safe compatibility diagnostics for future ChatGPT interface changes.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

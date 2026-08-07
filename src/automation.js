@@ -100,6 +100,8 @@ class ChatGPTAutomation {
   async newChat() {
     await this.assertSafePage(); const fresh = await runNative('new-chat', {}, 60000); await sleep(250); await this.assertSafePage();
     if (!fresh.ok || fresh.attachmentCount !== 0) throw new Error('新对话验证失败：页面仍包含旧附件，已停止本轮上传');
+    if (fresh.attachmentReady === false) throw new Error(`__UPLOAD_ENTRY_NOT_READY__:新对话已打开，但聊天模式附件入口未就绪；${fresh.diagnostic || '无兼容性诊断'}`);
+    if (fresh.modeSwitched) this.log('检测到页面不在标准聊天上传状态，已自动切换到 Chat 模式');
     this.currentChatUrl = null;
   }
   async uploadReferences(files, shouldAbort = () => false, options = {}) {
@@ -131,7 +133,7 @@ class ChatGPTAutomation {
           lastError = error; this.log(`参考图上传未完整（第 ${attempt}/2 次）：${error.message}`);
           const cleared = await runNative('clear-attachments', {}, 45000).catch(() => ({ ok: false }));
           if (!cleared.ok) { this.log('无法清除不完整附件，将通过刷新页面恢复'); break; }
-          if (attempt < 2) { this.log('已删除全部附件，正在重新上传所有参考图；本次失败后将进入安全暂停'); await sleep(350); }
+          if (attempt < 2) { this.log('已删除全部附件，正在重新定位聊天模式上传入口并上传所有参考图'); await sleep(350); }
         }
       }
       refreshCycle += 1;

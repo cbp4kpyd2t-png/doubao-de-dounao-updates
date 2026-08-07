@@ -535,7 +535,7 @@ class TaskRunner extends EventEmitter {
     try {
       const currentUrl = await this.browser.waitForStableCurrentChatUrl(10000).catch(() => null);
       const ignoredChats = this.state.ignoredChats ||= [];
-      if (currentUrl && !ignoredChats.some((item) => item.url === currentUrl)) ignoredChats.push({ id: crypto.randomUUID(), url: currentUrl, productId: context.productId, round: context.round, cycle: context.cycle, inputFingerprint: context.inputFingerprint, status: 'pending', processedIndexes: [], ignoredAt: new Date().toISOString(), reason: '界面连续无变化' });
+      if (currentUrl && context.promptSubmitted === true && !ignoredChats.some((item) => item.url === currentUrl)) ignoredChats.push({ id: crypto.randomUUID(), url: currentUrl, productId: context.productId, round: context.round, cycle: context.cycle, inputFingerprint: context.inputFingerprint, status: 'pending', processedIndexes: [], ignoredAt: new Date().toISOString(), reason: '界面连续无变化' });
       await this.checkpoint();
       this.log(`生成界面连续3次无变化，已记录当前对话等待安全时间点回收；本次不检查旧对话，直接刷新并打开新对话（第${this.watchRecoveryCount}次）`);
       await this.browser.refreshPage();
@@ -544,6 +544,7 @@ class TaskRunner extends EventEmitter {
       context.inputFingerprint = await buildInputFingerprint(context.images, context.prompt);
       await this.browser.uploadReferences(context.images, () => this.stopped);
       await this.browser.sendPrompt(context.prompt, this.state.generationTimeoutSeconds);
+      context.promptSubmitted = true;
       context.ps.chatAttempts = (context.ps.chatAttempts || 0) + 1;
       await this.recordNewConversation();
       this.emitStatus({ product: context.productName, round: context.round, phase: '生成中' });
@@ -695,7 +696,7 @@ class TaskRunner extends EventEmitter {
           const inputFingerprint = await buildInputFingerprint(latestProduct.images, prompt);
           ps.creativeFingerprint = preparedPrompt.creativeFingerprint;
           ps.creativeEngineVersion = preparedPrompt.creativeMode ? CREATIVE_ENGINE_VERSION : null;
-          this.watchRecoveryCount = 0; this.recoveryContext = { productId: product.id, productName: product.name, productDir: product.dir, sourcePromptText: latestProduct.prompt, productPrompt: preparedPrompt.sourcePrompt, images: latestProduct.images, prompt, inputFingerprint, creativeFingerprint: preparedPrompt.creativeFingerprint, creativeMode: preparedPrompt.creativeMode, round: nextRound, cycle: this.state.currentCycle, ps, hashes, outputs };
+          this.watchRecoveryCount = 0; this.recoveryContext = { productId: product.id, productName: product.name, productDir: product.dir, sourcePromptText: latestProduct.prompt, productPrompt: preparedPrompt.sourcePrompt, images: latestProduct.images, prompt, inputFingerprint, creativeFingerprint: preparedPrompt.creativeFingerprint, creativeMode: preparedPrompt.creativeMode, round: nextRound, cycle: this.state.currentCycle, ps, hashes, outputs, promptSubmitted: false };
           await this.runStep('检查旧对话', () => this.checkIgnoredChatsIfDue(this.recoveryContext), { maxAttempts: 1 });
           if (ps.completed >= 50) { this.recoveryContext = null; break roundLoop; }
           this.emitStatus({ product: product.name, productIndex: p + 1, productTotal: products.length, round: nextRound, completed: ps.completed, phase: '新对话中' });
@@ -705,7 +706,7 @@ class TaskRunner extends EventEmitter {
           const adaptiveGenerationSeconds = this.ensureScheduler().generationTimeoutSeconds(this.state.generationTimeoutSeconds); this.state.activeGenerationTimeoutSeconds = adaptiveGenerationSeconds;
           if (adaptiveGenerationSeconds !== this.state.generationTimeoutSeconds) this.log(`自适应调度根据近期生成速度把本对话等待时间调整为${adaptiveGenerationSeconds}秒（用户上限${this.state.generationTimeoutSeconds}秒）`);
           this.recoveryContext.generationStartedAt = Date.now();
-          await this.runStep('发送提示词', () => browser.sendPrompt(prompt, adaptiveGenerationSeconds), { maxAttempts: 1 }); ps.chatAttempts += 1;
+          await this.runStep('发送提示词', () => browser.sendPrompt(prompt, adaptiveGenerationSeconds), { maxAttempts: 1 }); this.recoveryContext.promptSubmitted = true; ps.chatAttempts += 1;
           this.startRoundPromptPrefetch(latestProduct, (ps.chatAttempts % 10) + 1, this.state.currentCycle, sourceFingerprint);
           await this.recordNewConversation(); await this.checkpoint(); this.emitStatus({ product: product.name, round: nextRound, completed: ps.completed, phase: '生成中' });
           let generationResult;
@@ -775,11 +776,11 @@ class TaskRunner extends EventEmitter {
           } catch (error) {
             this.nativeSaveInFlight = false;
             const savePageRecovered = error.message.startsWith('__SAVE_FAILED_RECOVERED__');
-            const uploadRetryExhausted = error.message.startsWith('__UPLOAD_RETRY_EXHAUSTED__');
+            const uploadRetryExhausted = /^__(UPLOAD_RETRY_EXHAUSTED|UPLOAD_ENTRY_NOT_READY)__/.test(error.message);
             if (error.message === '__STOPPED__') throw error;
             if (error.message === '__RATE_LIMIT_RESTART__') {
               const limitedUrl = await browser.getCurrentChatUrl().catch(() => null);
-              if (limitedUrl && this.recoveryContext) {
+              if (limitedUrl && this.recoveryContext?.promptSubmitted === true) {
                 const ignoredChats = this.state.ignoredChats ||= [];
                 if (!ignoredChats.some((item) => item.url === limitedUrl)) ignoredChats.push({ id: crypto.randomUUID(), url: limitedUrl, productId: product.id, round: roundAtStart + 1, cycle: this.state.currentCycle, inputFingerprint: this.recoveryContext.inputFingerprint, status: 'pending', processedIndexes: [], ignoredAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + 10 * 60000).toISOString(), reason: '限流冷却后放弃原对话并重启轮次' });
               }
@@ -788,7 +789,7 @@ class TaskRunner extends EventEmitter {
             }
             if (this.isRateLimited(error)) {
               const limitedUrl = await browser.getCurrentChatUrl().catch(() => null);
-              if (limitedUrl && this.recoveryContext) {
+              if (limitedUrl && this.recoveryContext?.promptSubmitted === true) {
                 const ignoredChats = this.state.ignoredChats ||= [];
                 if (!ignoredChats.some((item) => item.url === limitedUrl)) ignoredChats.push({ id: crypto.randomUUID(), url: limitedUrl, productId: product.id, round: roundAtStart + 1, cycle: this.state.currentCycle, inputFingerprint: this.recoveryContext.inputFingerprint, status: 'pending', processedIndexes: [], ignoredAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + 10 * 60000).toISOString(), reason: error.message });
               }
@@ -797,7 +798,7 @@ class TaskRunner extends EventEmitter {
             if (!roundCommitted) ps.round = roundAtStart;
             this.ensureScheduler().record({ outcome: 'failure', generationMs: this.recoveryContext?.generationStartedAt ? Date.now() - this.recoveryContext.generationStartedAt : 0, images: 0 }); await this.schedulerCheckpoint().catch(() => {});
             const failedUrl = await browser.getCurrentChatUrl().catch(() => null);
-            if (failedUrl && this.recoveryContext) {
+            if (failedUrl && this.recoveryContext?.promptSubmitted === true) {
               const ignoredChats = this.state.ignoredChats ||= [];
               if (!ignoredChats.some((item) => item.url === failedUrl)) ignoredChats.push({ id: crypto.randomUUID(), url: failedUrl, productId: product.id, round: roundAtStart + 1, cycle: this.state.currentCycle, inputFingerprint: this.recoveryContext.inputFingerprint, status: 'pending', processedIndexes: [], ignoredAt: new Date().toISOString(), reason: error.message });
             }

@@ -55,6 +55,16 @@ test('每轮上传前明确进入新对话阶段', () => {
   assert.ok(newChatAt >= 0 && newChatAt < callAt && callAt < uploadAt);
 });
 
+test('上传失败的空对话不进入图片回查队列', () => {
+  const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/runner'), 'utf8');
+  assert.match(source, /promptSubmitted: false/);
+  assert.match(source, /this\.recoveryContext\.promptSubmitted = true/);
+  assert.match(source, /failedUrl && this\.recoveryContext\?\.promptSubmitted === true/);
+  assert.match(source, /currentUrl && context\.promptSubmitted === true/);
+  assert.match(source, /limitedUrl && this\.recoveryContext\?\.promptSubmitted === true/);
+  assert.match(source, /UPLOAD_RETRY_EXHAUSTED\|UPLOAD_ENTRY_NOT_READY/);
+});
+
 test('图片路径读取失败时禁止误发缺图请求', () => {
   const fs = require('node:fs'); const source = fs.readFileSync(require.resolve('../src/automation'), 'utf8');
   assert.match(source, /已保存图片校验失败，损坏文件已删除并禁止误发补图请求/);

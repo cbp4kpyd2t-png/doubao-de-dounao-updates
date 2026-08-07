@@ -189,9 +189,22 @@ test('上传入口按输入框位置定位并兼容新版中英文菜单名称',
   assert.match(script, /Upload from computer\|Upload files\?\|Attach files\?\|Choose files\?/);
   assert.match(script, /\$uploadFile=/);
   assert.match(script, /\$selectFile=/);
-  assert.match(upload, /FindVisibleByAutomationId \$desktopRoot '1148'/);
+  assert.match(upload, /FindVisibleEdgeOpenFileNameField/);
+  assert.match(upload, /FindVisibleUploadMenuItem \$root/);
   assert.match(upload, /Compatible upload menu item was not found near the ChatGPT composer/);
   assert.doesNotMatch(upload, /Add photos and files menu item was not found/);
+});
+
+test('上传前强制验证Chat模式并且文件窗口只绑定当前Edge进程', () => {
+  const upload = script.slice(script.indexOf("if($Action -eq 'upload')"), script.indexOf("if($Action -eq 'inspect-attach-menu')"));
+  assert.match(script, /function FindChatModeTab/);
+  assert.match(script, /\^\(Chat\|聊天\)\$/);
+  assert.match(script, /function EnsureChatModeAndAttachment/);
+  assert.match(script, /function FindVisibleEdgeOpenDialog/);
+  assert.match(script, /\$window\.Current\.ProcessId -eq \$edge\.Id/);
+  assert.match(script, /function GetUploadCompatibilitySummary/);
+  assert.match(upload, /__UPLOAD_ENTRY_NOT_READY__/);
+  assert.doesNotMatch(upload, /FindVisibleByAutomationId \(\[Windows\.Automation\.AutomationElement\]::RootElement\) '1148'/);
 });
 
 test('附件不完整时支持删除全部附件后重传', () => {
