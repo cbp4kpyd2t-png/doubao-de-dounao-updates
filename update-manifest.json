@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.20",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.20/doubao-de-dounao-1.4.20-win-x64.zip",
-    "sha256":  "60a30850b2d4c538e3e6313161a445eb8c159133119cc72469bcd28d4b00ff11",
-    "notes":  "Fixes the current ChatGPT attachment menu remaining open without launching Upload from computer. The uploader now prioritizes the precise Upload from computer row, clicks the visible text target instead of an unreliable popup parent, verifies that the Windows file picker actually opened, and performs one bounded precise retry when the first click misses.",
-    "publishedAt":  "2026-08-08T09:26:50.6992351Z"
+    "version":  "1.4.21",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.21/doubao-de-dounao-1.4.21-win-x64.zip",
+    "sha256":  "fa8405254f9429de5cfdce21d00664bd17261d3f32a0363e6be7525a77eb51ed",
+    "notes":  "Fixes remote computers opening the Edge installation directory while uploading references. Before upload, every source is normalized to an absolute path and verified as an existing file. After writing the picker, the app reads the File name field back and confirms every requested image name is present, retries with clipboard input when needed, and blocks prompt submission if the picker contains only a product or folder name.",
+    "publishedAt":  "2026-08-08T09:58:16.1635696Z"
 }
