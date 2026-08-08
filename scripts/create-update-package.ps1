@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Hardens reference-image uploading by verifying Chat mode and the attachment entry before every upload, binding upload menus and file dialogs to the controlled Edge window, excluding unsent failed chats from image backchecks, and logging safe compatibility diagnostics for future ChatGPT interface changes.'
+  notes = 'Fixes reference uploads on computers where the Windows file picker belongs to an Edge child process instead of the main Edge process. The uploader binds newly opened pickers to the controlled Edge process group, brings the picker forward, submits absolute paths directly, and uses bounded adaptive waits instead of a 90-second stall. Slow computers also receive longer bounded waits for Save As completion and saved files to appear, while fast saves continue immediately.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

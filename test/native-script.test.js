@@ -21,7 +21,7 @@ test('另存为流程使用窗口控件并采用快速有限确认', () => {
   assert.match(submitSave, /Save As file name field did not accept the full target path/);
   assert.match(submitSave, /\^Open\$\|\^\$openWord\$/);
   assert.match(submitSave, /\$attempt=1;\$attempt -le 2/);
-  assert.match(submitSave, /\$check=0;\$check -lt 12/);
+  assert.match(submitSave, /\$check=0;\$check -lt 32/);
   const saveAction = script.slice(script.indexOf("if($Action -eq 'save-viewer-images')"));
   assert.doesNotMatch(saveAction, /SendWait\('%n'\)/);
   assert.match(script, /foreach\(\$automationId in @\('1001','1148'\)\)/);
@@ -195,15 +195,22 @@ test('上传入口按输入框位置定位并兼容新版中英文菜单名称',
   assert.doesNotMatch(upload, /Add photos and files menu item was not found/);
 });
 
-test('上传前强制验证Chat模式并且文件窗口只绑定当前Edge进程', () => {
+test('上传前强制验证Chat模式并兼容当前Edge进程组的新文件窗口', () => {
   const upload = script.slice(script.indexOf("if($Action -eq 'upload')"), script.indexOf("if($Action -eq 'inspect-attach-menu')"));
   assert.match(script, /function FindChatModeTab/);
   assert.match(script, /\^\(Chat\|聊天\)\$/);
   assert.match(script, /function EnsureChatModeAndAttachment/);
   assert.match(script, /function FindVisibleEdgeOpenDialog/);
-  assert.match(script, /\$window\.Current\.ProcessId -eq \$edge\.Id/);
+  assert.match(script, /\$edgePids -contains \$pid/);
+  assert.match(script, /\$owner -eq \$boundHandle -or \$rootOwner -eq \$boundHandle/);
+  assert.match(script, /\$knownHandles -contains \$handle/);
   assert.match(script, /function GetUploadCompatibilitySummary/);
   assert.match(upload, /__UPLOAD_ENTRY_NOT_READY__/);
+  assert.match(upload, /__UPLOAD_PICKER_NOT_READY__/);
+  assert.match(upload, /FindVisibleEdgeOpenFileNameField \$knownDialogHandles/);
+  assert.match(upload, /\$i -lt 40/);
+  assert.match(script, /for\(\$i=0;\$i -lt 32;\$i\+\+\).*\$dialog\.Current\.IsOffscreen/s);
+  assert.doesNotMatch(upload, /SendWait\('%n'\)/);
   assert.doesNotMatch(upload, /FindVisibleByAutomationId \(\[Windows\.Automation\.AutomationElement\]::RootElement\) '1148'/);
 });
 
