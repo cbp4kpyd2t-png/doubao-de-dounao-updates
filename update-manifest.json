@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.26",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.26/doubao-de-dounao-1.4.26-win-x64.zip",
-    "sha256":  "6757da0fb68ffac517332d089c304f320e7ceb080d4e933d6e5da9c7801ef15d",
+    "version":  "1.4.27",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.27/doubao-de-dounao-1.4.27-win-x64.zip",
+    "sha256":  "0c4dea325439ca014354711f5b658e389e837a246f89b67ad83597b7287f5865",
     "notes":  "Fixes the remote file picker falsely reporting upload success when its File name field is below the visible screen area. The uploader now locates the native File name control by automation ID even when Windows marks it offscreen, writes the selected image basenames through the control value interface, and treats an inaccessible field as a hard upload failure instead of leaving the picker open and continuing.",
-    "publishedAt":  "2026-08-08T12:41:14.7104936Z"
+    "publishedAt":  "2026-08-08T13:07:36.6063752Z"
 }
