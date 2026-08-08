@@ -111,7 +111,7 @@ function FindByName($root,$regex,$controlType=$null){
   return $null
 }
 function FindByAutomationId($root,$id){ return $root.FindFirst([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id))) }
-function FindVisibleByAutomationId($root,$id){$matches=$root.FindAll([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id))); foreach($el in $matches){if(-not $el.Current.IsOffscreen -and $el.Current.IsEnabled){return $el}}; return $null}
+function FindVisibleByAutomationId($root,$id){$automationElements=$root.FindAll([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id))); foreach($el in $automationElements){if(-not $el.Current.IsOffscreen -and $el.Current.IsEnabled){return $el}}; return $null}
 function FindAttachmentButtonNearComposer($pageRoot){
   $composer=FindByAutomationId $pageRoot 'prompt-textarea';if(-not $composer){return $null};$cr=$composer.Current.BoundingRectangle;$candidates=@()
   foreach($el in (All $pageRoot)){
@@ -132,7 +132,7 @@ function FindAttachmentButtonNearComposer($pageRoot){
 }
 function FindVisibleUploadMenuItem($pageRoot){
   $pattern="Add photos and files|Upload from computer|Upload files?|Attach files?|Choose files?|Photos and files|^$addPhotosFiles$|^$fromComputerUpload$|^$uploadPhoto$|^$uploadFile$|^$selectFile$|^$addFile$|^$photosFiles$"
-  $composer=FindByAutomationId $pageRoot 'prompt-textarea';if(-not $composer){return $null};$cr=$composer.Current.BoundingRectangle;$matches=@()
+  $composer=FindByAutomationId $pageRoot 'prompt-textarea';if(-not $composer){return $null};$cr=$composer.Current.BoundingRectangle;$menuCandidates=@()
   foreach($el in (All $pageRoot)){
     try{
       if($el.Current.IsOffscreen -or -not $el.Current.IsEnabled -or -not $el.Current.Name -or $el.Current.Name -notmatch $pattern){continue}
@@ -149,11 +149,11 @@ function FindVisibleUploadMenuItem($pageRoot){
       $isComputerUpload=($name -match "Upload from computer|^$fromComputerUpload$")
       $priority=if($isComputerUpload){0}elseif($name -match "Upload files?|Choose files?|^$uploadFile$|^$selectFile$"){1}elseif($el.Current.ControlType.ProgrammaticName -match 'Button|MenuItem'){2}else{3}
       $distance=[Math]::Abs($cx-($cr.X+80))+[Math]::Abs($cy-$cr.Y)
-      $matches+=@{element=$el;priority=$priority;distance=$distance;area=$r.Width*$r.Height}
+      $menuCandidates+=@{element=$el;priority=$priority;distance=$distance;area=$r.Width*$r.Height}
     }catch{}
   }
-  if(-not $matches.Count){return $null}
-  return ($matches|Sort-Object priority,distance,area|Select-Object -First 1).element
+  if(-not $menuCandidates.Count){return $null}
+  return ($menuCandidates|Sort-Object priority,distance,area|Select-Object -First 1).element
 }
 function ClickUploadMenuItem($item){
   if(-not $item){return $false}
@@ -168,17 +168,17 @@ function WaitForNewUploadFileNameField($knownHandles,$attempts=12){
   return $null
 }
 function FindChatModeTab($pageRoot){
-  $wr=$pageRoot.Current.BoundingRectangle;$matches=@()
+  $wr=$pageRoot.Current.BoundingRectangle;$tabCandidates=@()
   foreach($el in (All $pageRoot)){
     try{
       if($el.Current.IsOffscreen -or -not $el.Current.IsEnabled -or $el.Current.Name -notmatch '^(Chat|聊天)$'){continue}
       if($el.Current.ControlType.ProgrammaticName -notmatch 'Button|TabItem|RadioButton|Text'){continue}
       $r=$el.Current.BoundingRectangle;if($r.Width -le 0 -or $r.Height -le 0){continue};$cx=$r.X+$r.Width/2;$cy=$r.Y+$r.Height/2
       if($cx -lt ($wr.X+$wr.Width*0.2) -or $cx -gt ($wr.X+$wr.Width*0.8) -or $cy -lt ($wr.Y+30) -or $cy -gt ($wr.Y+320)){continue}
-      $priority=if($el.Current.ControlType.ProgrammaticName -match 'Button|TabItem|RadioButton'){0}else{1};$matches+=@{element=$el;priority=$priority;y=$r.Y}
+      $priority=if($el.Current.ControlType.ProgrammaticName -match 'Button|TabItem|RadioButton'){0}else{1};$tabCandidates+=@{element=$el;priority=$priority;y=$r.Y}
     }catch{}
   }
-  if(-not $matches.Count){return $null};return ($matches|Sort-Object priority,y|Select-Object -First 1).element
+  if(-not $tabCandidates.Count){return $null};return ($tabCandidates|Sort-Object priority,y|Select-Object -First 1).element
 }
 function EnsureChatModeAndAttachment($pageRoot){
   $chatTab=FindChatModeTab $pageRoot
@@ -191,7 +191,7 @@ function EnsureChatModeAndAttachment($pageRoot){
 }
 function VisibleOpenDialogHandles(){
   $desktop=[Windows.Automation.AutomationElement]::RootElement;$handles=@()
-  foreach($window in $desktop.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition)){
+  foreach($window in (All $desktop)){
     try{if(-not $window.Current.IsOffscreen -and $window.Current.ControlType.ProgrammaticName -match 'Window' -and $window.Current.Name -match "^Open$|^$openWord$"){$handles+=[int64]$window.Current.NativeWindowHandle}}catch{}
   }
   return @($handles)
@@ -207,9 +207,9 @@ function FindOpenFileNameField($dialog){
       }
     }
   }
-  $host=FindByAutomationId $dialog 'FileNameControlHost'
-  if($host){
-    foreach($child in (All $host)){
+  $fileNameHost=FindByAutomationId $dialog 'FileNameControlHost'
+  if($fileNameHost){
+    foreach($child in (All $fileNameHost)){
       try{if($child.Current.IsEnabled -and ($child.Current.ControlType.ProgrammaticName -match 'Edit' -or $child.Current.ClassName -match '^Edit$')){return $child}}catch{}
     }
   }
@@ -227,21 +227,24 @@ function FindOpenFileNameField($dialog){
 }
 function FindVisibleEdgeOpenDialog($knownHandles=@()){
   $boundHandle=PreferredWindowHandle;if($boundHandle -le 0){$edge=EdgeProcess;if($edge){$boundHandle=[int64]$edge.MainWindowHandle}}
-  $edgePids=@(Get-Process msedge -ErrorAction SilentlyContinue|ForEach-Object{[int]$_.Id});$desktop=[Windows.Automation.AutomationElement]::RootElement;$matches=@()
-  foreach($window in $desktop.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition)){
+  $edgePids=@(Get-Process msedge -ErrorAction SilentlyContinue|ForEach-Object{[int]$_.Id});$desktop=[Windows.Automation.AutomationElement]::RootElement;$dialogCandidates=@()
+  foreach($window in (All $desktop)){
     try{
       if($window.Current.IsOffscreen -or $window.Current.ControlType.ProgrammaticName -notmatch 'Window' -or $window.Current.Name -notmatch "^Open$|^$openWord$"){continue}
-      $handle=[int64]$window.Current.NativeWindowHandle;if($knownHandles -contains $handle){continue};$field=FindOpenFileNameField $window;if(-not $field){continue}
-      $owner=[int64][NativeWindow]::GetWindow([IntPtr]$handle,4);$rootOwner=[int64][NativeWindow]::GetAncestor([IntPtr]$handle,3);$pid=[int]$window.Current.ProcessId;$priority=9
+      $handle=[int64]$window.Current.NativeWindowHandle;if($knownHandles -contains $handle){continue}
+      $owner=[int64][NativeWindow]::GetWindow([IntPtr]$handle,4);$rootOwner=[int64][NativeWindow]::GetAncestor([IntPtr]$handle,3);$windowProcessId=[int]$window.Current.ProcessId;$priority=9
       if($boundHandle -gt 0 -and ($owner -eq $boundHandle -or $rootOwner -eq $boundHandle)){$priority=0}
-      elseif($edgePids -contains $pid){$priority=1}
-      elseif($window.Current.ClassName -match '#32770|Chrome_WidgetWin'){$priority=2}
-      if($priority -lt 9){$matches+=@{element=$window;priority=$priority;handle=$handle}}
+      elseif($edgePids -contains $windowProcessId){$priority=1}
+      if($priority -lt 9){$dialogCandidates+=@{element=$window;priority=$priority;handle=$handle}}
     }catch{}
   }
-  if(-not $matches.Count){return $null};return ($matches|Sort-Object priority|Select-Object -First 1).element
+  if(-not $dialogCandidates.Count){return $null};return ($dialogCandidates|Sort-Object priority|Select-Object -First 1).element
 }
 function FindVisibleEdgeOpenFileNameField($knownHandles=@()){ $dialog=FindVisibleEdgeOpenDialog $knownHandles;if(-not $dialog){return $null};return (FindOpenFileNameField $dialog) }
+function WaitForNewUploadDialog($knownHandles=@(),$attempts=40){
+  for($i=0;$i -lt $attempts;$i++){$dialog=FindVisibleEdgeOpenDialog $knownHandles;if($dialog){return $dialog};Start-Sleep -Milliseconds 250}
+  return $null
+}
 function FocusContainingWindow($el){
   $current=$el;$window=$null
   for($i=0;$i -lt 24 -and $current;$i++){try{if($current.Current.ControlType.ProgrammaticName -match 'Window'){$window=$current};$current=[Windows.Automation.TreeWalker]::RawViewWalker.GetParent($current)}catch{break}}
@@ -255,8 +258,8 @@ function GetUploadCompatibilitySummary($pageRoot){
   return "composer=$([bool]$composer);attachment=$([bool]$attachment);chatTab=$([bool]$chat);edgeDialog=$([bool](FindVisibleEdgeOpenDialog));near=$([string]::Join('|',$near))"
 }
 function FindNativeControl($root,$id,$classRegex){
-  $matches=$root.FindAll([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id)))
-  foreach($el in $matches){if(-not $el.Current.IsOffscreen -and $el.Current.IsEnabled -and $el.Current.ClassName -match $classRegex){return $el}}
+  $automationElements=$root.FindAll([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$id)))
+  foreach($el in $automationElements){if(-not $el.Current.IsOffscreen -and $el.Current.IsEnabled -and $el.Current.ClassName -match $classRegex){return $el}}
   return $null
 }
 function ReadUploadFileNameValue($fileName){
@@ -331,7 +334,7 @@ function SubmitOpenDialogByWindowMessages($dialog,$text){
   if(-not [NativeWindow]::SetDialogText($field,$text)){return $false};Start-Sleep -Milliseconds 300
   $open=[NativeWindow]::FindOpenButton($handle);if($open -eq [IntPtr]::Zero){return $false}
   if(-not [NativeWindow]::ClickDialogButton($open)){return $false}
-  for($i=0;$i -lt 32;$i++){Start-Sleep -Milliseconds 250;try{if($dialog.Current.IsOffscreen){return $true}}catch{return $true}}
+  for($i=0;$i -lt 32;$i++){Start-Sleep -Milliseconds 250;if(-not [NativeWindow]::IsWindow($handle)){return $true};try{if($dialog.Current.IsOffscreen){return $true}}catch{return $true}}
   return $false
 }
 function SubmitFileNames($fileName,$quoted,$files){
@@ -403,8 +406,8 @@ function FindExactNameInProcess($root,$names,$processName){
   foreach($name in $names){
     try{
       $condition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,[string]$name)
-      $matches=$root.FindAll([Windows.Automation.TreeScope]::Descendants,$condition)
-      foreach($element in $matches){
+      $namedElements=$root.FindAll([Windows.Automation.TreeScope]::Descendants,$condition)
+      foreach($element in $namedElements){
         try{$owner=Get-Process -Id $element.Current.ProcessId -ErrorAction Stop;if($owner.ProcessName -eq $processName -and -not $element.Current.IsOffscreen){return $element}}catch{}
       }
     }catch{Start-Sleep -Milliseconds 100}
@@ -416,8 +419,8 @@ function FindExactNameNearPoint($root,$names,$x,$y,$windowRect){
   foreach($name in $names){
     try{
       $condition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,[string]$name)
-      $matches=$root.FindAll([Windows.Automation.TreeScope]::Descendants,$condition)
-      foreach($element in $matches){
+      $namedElements=$root.FindAll([Windows.Automation.TreeScope]::Descendants,$condition)
+      foreach($element in $namedElements){
         try{
           $r=$element.Current.BoundingRectangle
           if($element.Current.IsOffscreen -or -not $element.Current.IsEnabled -or $r.Width -le 0 -or $r.Height -le 0){continue}
@@ -958,19 +961,26 @@ if($Action -eq 'upload'){
   $quoted=($files|ForEach-Object{'"'+$_+'"'}) -join ' '
   $root=Root;$mode=EnsureChatModeAndAttachment $root;$root=Root
   if(-not $mode.ok){throw "__UPLOAD_ENTRY_NOT_READY__:Chat mode or attachment entry was not ready; $(GetUploadCompatibilitySummary $root)"}
-  $existingFileName=FindVisibleEdgeOpenFileNameField
-  if($existingFileName){if(-not (SubmitFileNames $existingFileName $quoted $files)){CloseOpenDialog;throw '__UPLOAD_PICKER_NOT_READY__:The existing file picker did not accept the selected reference paths'};$attached=WaitForAttachments $expectedTotal;Result @{ok=($attached -ge $expectedTotal);incomplete=($attached -lt $expectedTotal);reusedPicker=$true;attachmentCount=$attached}}
+  $existingDialog=FindVisibleEdgeOpenDialog
+  if($existingDialog){
+    $submitted=SubmitOpenDialogByWindowMessages $existingDialog $quoted
+    if(-not $submitted){$existingFileName=FindOpenFileNameField $existingDialog;if($existingFileName){$submitted=SubmitFileNames $existingFileName $quoted $files}}
+    if(-not $submitted){CloseOpenDialog;throw '__UPLOAD_PICKER_NOT_READY__:The existing file picker did not accept the selected reference paths'}
+    $attached=WaitForAttachments $expectedTotal;Result @{ok=($attached -ge $expectedTotal);incomplete=($attached -lt $expectedTotal);reusedPicker=$true;attachmentCount=$attached}
+  }
   [Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 400
   $knownDialogHandles=@(VisibleOpenDialogHandles)
   $add=FindAttachmentButtonNearComposer $root
   if(-not $add){$add=FindByName $root 'Attach files|Add photos|Upload' 'Button'}
   if(-not $add){throw "__UPLOAD_ENTRY_NOT_READY__:Attachment button was not found; $(GetUploadCompatibilitySummary $root)"}; ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800
-  $upload=$null;$fileName=FindVisibleEdgeOpenFileNameField $knownDialogHandles
-  if(-not $fileName){for($i=0;$i -lt 12;$i++){ $upload=FindVisibleUploadMenuItem $root; if($upload){break}; $fileName=FindVisibleEdgeOpenFileNameField $knownDialogHandles;if($fileName){break}; Start-Sleep -Milliseconds 200 }}
-  if(-not $upload -and -not $fileName){ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800; $root=Root;$upload=FindVisibleUploadMenuItem $root;$fileName=FindVisibleEdgeOpenFileNameField $knownDialogHandles}
+  $upload=$null;$dialog=FindVisibleEdgeOpenDialog $knownDialogHandles;$fileName=if($dialog){FindOpenFileNameField $dialog}else{$null}
+  if(-not $dialog -and -not $fileName){for($i=0;$i -lt 12;$i++){ $dialog=FindVisibleEdgeOpenDialog $knownDialogHandles;if($dialog){$fileName=FindOpenFileNameField $dialog;break};$upload=FindVisibleUploadMenuItem $root;if($upload){break};Start-Sleep -Milliseconds 200 }}
+  if(-not $upload -and -not $dialog -and -not $fileName){ClickElement $add|Out-Null;Start-Sleep -Milliseconds 800;$root=Root;$upload=FindVisibleUploadMenuItem $root;$dialog=FindVisibleEdgeOpenDialog $knownDialogHandles;if($dialog){$fileName=FindOpenFileNameField $dialog}}
   if($upload){ClickUploadMenuItem $upload|Out-Null}
-  elseif(-not $fileName){throw "__UPLOAD_ENTRY_NOT_READY__:Compatible upload menu item was not found near the ChatGPT composer; $(GetUploadCompatibilitySummary $root)"}
-  if(-not $fileName){$fileName=WaitForNewUploadFileNameField $knownDialogHandles 12}
+  elseif(-not $dialog -and -not $fileName){throw "__UPLOAD_ENTRY_NOT_READY__:Compatible upload menu item was not found near the ChatGPT composer; $(GetUploadCompatibilitySummary $root)"}
+  if(-not $dialog){$dialog=FindVisibleEdgeOpenDialog $knownDialogHandles}
+  if(-not $dialog){$dialog=WaitForNewUploadDialog $knownDialogHandles 12}
+  if($dialog -and -not $fileName){$fileName=FindOpenFileNameField $dialog}
   # A visible menu without a file picker means the first click missed the
   # command. Re-open it and perform one verified precise retry instead of
   # waiting until the whole upload operation times out.
@@ -978,10 +988,12 @@ if($Action -eq 'upload'){
     $root=Root;$add=FindAttachmentButtonNearComposer $root
     $visibleUpload=FindVisibleUploadMenuItem $root
     if(-not $visibleUpload -and $add){ClickElement $add|Out-Null;Start-Sleep -Milliseconds 500;$root=Root;$visibleUpload=FindVisibleUploadMenuItem $root}
-    if($visibleUpload){ClickUploadMenuItem $visibleUpload|Out-Null;$fileName=WaitForNewUploadFileNameField $knownDialogHandles 28}
+    if($visibleUpload){ClickUploadMenuItem $visibleUpload|Out-Null;$dialog=WaitForNewUploadDialog $knownDialogHandles 28;if($dialog){$fileName=FindOpenFileNameField $dialog}}
   }
-  if(-not $fileName){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:A new Edge file picker appeared but its file-name field was not available within 10 seconds'}
-  if(-not (SubmitFileNames $fileName $quoted $files)){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:The file picker did not accept the selected reference paths within 8 seconds'}
+  if(-not $dialog){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:A new Edge file picker did not become available within 10 seconds'}
+  $submitted=SubmitOpenDialogByWindowMessages $dialog $quoted
+  if(-not $submitted -and $fileName){$submitted=SubmitFileNames $fileName $quoted $files}
+  if(-not $submitted){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:The file picker did not accept the selected reference paths within 8 seconds'}
   $attached=WaitForAttachments $expectedTotal
   Result @{ok=($attached -ge $expectedTotal);incomplete=($attached -lt $expectedTotal);attachmentCount=$attached}
 }

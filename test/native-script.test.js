@@ -202,7 +202,7 @@ test('上传入口按输入框位置定位并兼容新版中英文菜单名称',
   assert.match(script, /\$isComputerUpload=.*Upload from computer/);
   assert.match(script, /\$uploadFile=/);
   assert.match(script, /\$selectFile=/);
-  assert.match(upload, /FindVisibleEdgeOpenFileNameField/);
+  assert.match(upload, /FindVisibleEdgeOpenDialog/);
   assert.match(upload, /FindVisibleUploadMenuItem \$root/);
   assert.match(upload, /Compatible upload menu item was not found near the ChatGPT composer/);
   assert.doesNotMatch(upload, /Add photos and files menu item was not found/);
@@ -214,18 +214,23 @@ test('上传前强制验证Chat模式并兼容当前Edge进程组的新文件窗
   assert.match(script, /\^\(Chat\|聊天\)\$/);
   assert.match(script, /function EnsureChatModeAndAttachment/);
   assert.match(script, /function FindVisibleEdgeOpenDialog/);
-  assert.match(script, /\$field=FindOpenFileNameField \$window/);
+  assert.match(script, /foreach\(\$window in \(All \$desktop\)\)/);
+  assert.doesNotMatch(script, /\$field=FindOpenFileNameField \$window/);
   assert.match(script, /function FindOpenFileNameField/);
   assert.match(script, /foreach\(\$automationId in @\('1148','1001'\)\)/);
-  assert.match(script, /\$edgePids -contains \$pid/);
+  assert.match(script, /\$edgePids -contains \$windowProcessId/);
+  assert.doesNotMatch(script, /\$pid=\[int\]\$window\.Current\.ProcessId/);
   assert.match(script, /\$owner -eq \$boundHandle -or \$rootOwner -eq \$boundHandle/);
   assert.match(script, /\$knownHandles -contains \$handle/);
   assert.match(script, /function GetUploadCompatibilitySummary/);
   assert.match(upload, /__UPLOAD_ENTRY_NOT_READY__/);
   assert.match(upload, /__UPLOAD_PICKER_NOT_READY__/);
-  assert.match(upload, /FindVisibleEdgeOpenFileNameField \$knownDialogHandles/);
-  assert.match(upload, /WaitForNewUploadFileNameField \$knownDialogHandles 12/);
-  assert.match(upload, /WaitForNewUploadFileNameField \$knownDialogHandles 28/);
+  assert.match(upload, /FindVisibleEdgeOpenDialog \$knownDialogHandles/);
+  assert.match(script, /function WaitForNewUploadDialog/);
+  assert.match(upload, /SubmitOpenDialogByWindowMessages \$dialog \$quoted/);
+  assert.match(upload, /SubmitOpenDialogByWindowMessages \$existingDialog \$quoted/);
+  assert.match(upload, /WaitForNewUploadDialog \$knownDialogHandles 12/);
+  assert.match(upload, /WaitForNewUploadDialog \$knownDialogHandles 28/);
   assert.match(upload, /ClickUploadMenuItem \$visibleUpload/);
   assert.doesNotMatch(upload, /RawViewWalker\.GetParent\(\$upload\)/);
   assert.match(script, /for\(\$i=0;\$i -lt 32;\$i\+\+\).*\$dialog\.Current\.IsOffscreen/s);
@@ -241,6 +246,7 @@ test('上传前强制验证Chat模式并兼容当前Edge进程组的新文件窗
   assert.match(script, /FindOpenFileNameControl/);
   assert.match(script, /SetDialogText/);
   assert.match(script, /ClickDialogButton/);
+  assert.match(script, /if\(-not \[NativeWindow\]::IsWindow\(\$handle\)\)\{return \$true\}/);
   assert.match(script, /if\(SubmitOpenDialogByWindowMessages \$dialog \$baseQuoted\)\{return \$true\}/);
 });
 
