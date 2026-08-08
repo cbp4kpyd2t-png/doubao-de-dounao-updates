@@ -187,6 +187,9 @@ test('上传入口按输入框位置定位并兼容新版中英文菜单名称',
   assert.match(script, /\$cx -lt \(\$cr\.X-40\).*\$cy -gt \(\$cr\.Y\+\$cr\.Height\+35\)/s);
   assert.match(script, /function FindVisibleUploadMenuItem/);
   assert.match(script, /Upload from computer\|Upload files\?\|Attach files\?\|Choose files\?/);
+  assert.match(script, /function ClickUploadMenuItem/);
+  assert.match(script, /function WaitForNewUploadFileNameField/);
+  assert.match(script, /\$isComputerUpload=.*Upload from computer/);
   assert.match(script, /\$uploadFile=/);
   assert.match(script, /\$selectFile=/);
   assert.match(upload, /FindVisibleEdgeOpenFileNameField/);
@@ -208,7 +211,10 @@ test('上传前强制验证Chat模式并兼容当前Edge进程组的新文件窗
   assert.match(upload, /__UPLOAD_ENTRY_NOT_READY__/);
   assert.match(upload, /__UPLOAD_PICKER_NOT_READY__/);
   assert.match(upload, /FindVisibleEdgeOpenFileNameField \$knownDialogHandles/);
-  assert.match(upload, /\$i -lt 40/);
+  assert.match(upload, /WaitForNewUploadFileNameField \$knownDialogHandles 12/);
+  assert.match(upload, /WaitForNewUploadFileNameField \$knownDialogHandles 28/);
+  assert.match(upload, /ClickUploadMenuItem \$visibleUpload/);
+  assert.doesNotMatch(upload, /RawViewWalker\.GetParent\(\$upload\)/);
   assert.match(script, /for\(\$i=0;\$i -lt 32;\$i\+\+\).*\$dialog\.Current\.IsOffscreen/s);
   assert.doesNotMatch(upload, /SendWait\('%n'\)/);
   assert.doesNotMatch(upload, /FindVisibleByAutomationId \(\[Windows\.Automation\.AutomationElement\]::RootElement\) '1148'/);

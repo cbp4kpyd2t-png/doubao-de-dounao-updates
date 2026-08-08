@@ -102,13 +102,32 @@ function FindVisibleUploadMenuItem($pageRoot){
       $r=$el.Current.BoundingRectangle;if($r.Width -le 0 -or $r.Height -le 0){continue}
       $cx=$r.X+$r.Width/2;$cy=$r.Y+$r.Height/2
       if($cx -lt ($cr.X-160) -or $cx -gt ($cr.X+$cr.Width+260) -or $cy -lt ($cr.Y-560) -or $cy -gt ($cr.Y+$cr.Height+180)){continue}
-      $priority=if($el.Current.ControlType.ProgrammaticName -match 'Button|MenuItem'){0}else{1}
+      $name=[string]$el.Current.Name
+      # The current ChatGPT menu exposes two labels in one row: the action
+      # ("Add photos and files") and the hint ("Upload from computer").  The
+      # hint is the safest click target because it is always inside the native
+      # file-picker action.  Do not let the larger generic label win merely
+      # because UI Automation exposes it as a Button.
+      $isComputerUpload=($name -match "Upload from computer|^$fromComputerUpload$")
+      $priority=if($isComputerUpload){0}elseif($name -match "Upload files?|Choose files?|^$uploadFile$|^$selectFile$"){1}elseif($el.Current.ControlType.ProgrammaticName -match 'Button|MenuItem'){2}else{3}
       $distance=[Math]::Abs($cx-($cr.X+80))+[Math]::Abs($cy-$cr.Y)
       $matches+=@{element=$el;priority=$priority;distance=$distance;area=$r.Width*$r.Height}
     }catch{}
   }
   if(-not $matches.Count){return $null}
   return ($matches|Sort-Object priority,distance,area|Select-Object -First 1).element
+}
+function ClickUploadMenuItem($item){
+  if(-not $item){return $false}
+  # Text nodes in the Chromium accessibility tree already occupy the visible
+  # clickable row.  Clicking their immediate parent is unreliable because the
+  # parent may be the whole popup rather than the menu command.
+  if($item.Current.ControlType.ProgrammaticName -match 'Button|MenuItem'){return (InvokeElement $item)}
+  return (ClickElement $item)
+}
+function WaitForNewUploadFileNameField($knownHandles,$attempts=12){
+  for($i=0;$i -lt $attempts;$i++){$field=FindVisibleEdgeOpenFileNameField $knownHandles;if($field){return $field};Start-Sleep -Milliseconds 250}
+  return $null
 }
 function FindChatModeTab($pageRoot){
   $wr=$pageRoot.Current.BoundingRectangle;$matches=@()
@@ -782,10 +801,18 @@ if($Action -eq 'upload'){
   $upload=$null;$fileName=FindVisibleEdgeOpenFileNameField $knownDialogHandles
   if(-not $fileName){for($i=0;$i -lt 12;$i++){ $upload=FindVisibleUploadMenuItem $root; if($upload){break}; $fileName=FindVisibleEdgeOpenFileNameField $knownDialogHandles;if($fileName){break}; Start-Sleep -Milliseconds 200 }}
   if(-not $upload -and -not $fileName){ClickElement $add|Out-Null; Start-Sleep -Milliseconds 800; $root=Root;$upload=FindVisibleUploadMenuItem $root;$fileName=FindVisibleEdgeOpenFileNameField $knownDialogHandles}
-  if($upload){$uploadTarget=$upload;if($upload.Current.ControlType.ProgrammaticName -match 'Text'){$parent=[Windows.Automation.TreeWalker]::RawViewWalker.GetParent($upload);if($parent){$uploadTarget=$parent}};if(-not (InvokeElement $uploadTarget)){ClickElement $uploadTarget|Out-Null}}
+  if($upload){ClickUploadMenuItem $upload|Out-Null}
   elseif(-not $fileName){throw "__UPLOAD_ENTRY_NOT_READY__:Compatible upload menu item was not found near the ChatGPT composer; $(GetUploadCompatibilitySummary $root)"}
-  $fileName=$null
-  for($i=0;$i -lt 40;$i++){ $fileName=FindVisibleEdgeOpenFileNameField $knownDialogHandles; if($fileName){break}; Start-Sleep -Milliseconds 250 }
+  if(-not $fileName){$fileName=WaitForNewUploadFileNameField $knownDialogHandles 12}
+  # A visible menu without a file picker means the first click missed the
+  # command. Re-open it and perform one verified precise retry instead of
+  # waiting until the whole upload operation times out.
+  if(-not $fileName){
+    $root=Root;$add=FindAttachmentButtonNearComposer $root
+    $visibleUpload=FindVisibleUploadMenuItem $root
+    if(-not $visibleUpload -and $add){ClickElement $add|Out-Null;Start-Sleep -Milliseconds 500;$root=Root;$visibleUpload=FindVisibleUploadMenuItem $root}
+    if($visibleUpload){ClickUploadMenuItem $visibleUpload|Out-Null;$fileName=WaitForNewUploadFileNameField $knownDialogHandles 28}
+  }
   if(-not $fileName){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:A new Edge file picker appeared but its file-name field was not available within 10 seconds'}
   if(-not (SubmitFileNames $fileName $quoted)){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:The file picker did not accept the selected reference paths within 8 seconds'}
   $attached=WaitForAttachments $payload.files.Count
