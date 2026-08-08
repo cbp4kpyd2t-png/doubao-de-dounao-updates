@@ -192,10 +192,33 @@ function FindNativeControl($root,$id,$classRegex){
   foreach($el in $matches){if(-not $el.Current.IsOffscreen -and $el.Current.IsEnabled -and $el.Current.ClassName -match $classRegex){return $el}}
   return $null
 }
-function SubmitFileNames($fileName,$quoted){
-  $dialog=FocusContainingWindow $fileName;try{$fileName.SetFocus()}catch{ClickElement $fileName|Out-Null};Start-Sleep -Milliseconds 220
-  try{$value=$fileName.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern);$value.SetValue($quoted)}catch{SetClipboardText $quoted;[Windows.Forms.SendKeys]::SendWait('^a');[Windows.Forms.SendKeys]::SendWait('^v')}
-  Start-Sleep -Milliseconds 220;[Windows.Forms.SendKeys]::SendWait('{ENTER}')
+function ReadUploadFileNameValue($fileName){
+  try{return [string]$fileName.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value}catch{}
+  try{return [string]$fileName.Current.Name}catch{}
+  return ''
+}
+function UploadFileNameValueIsComplete($actual,$quoted,$files){
+  if(-not $actual){return $false}
+  if($actual -eq $quoted){return $true}
+  foreach($file in $files){if($actual.IndexOf([IO.Path]::GetFileName([string]$file),[StringComparison]::OrdinalIgnoreCase) -lt 0){return $false}}
+  return $true
+}
+function WriteAndVerifyUploadFileNames($fileName,$quoted,$files){
+  for($attempt=1;$attempt -le 3;$attempt++){
+    FocusContainingWindow $fileName|Out-Null;try{$fileName.SetFocus()}catch{ClickElement $fileName|Out-Null};Start-Sleep -Milliseconds 220
+    if($attempt -eq 1){try{$value=$fileName.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern);$value.SetValue($quoted)}catch{}}
+    else{SetClipboardText $quoted;[Windows.Forms.SendKeys]::SendWait('^a');[Windows.Forms.SendKeys]::SendWait('^v')}
+    Start-Sleep -Milliseconds 350
+    $actual=ReadUploadFileNameValue $fileName
+    if(UploadFileNameValueIsComplete $actual $quoted $files){return @{ok=$true;actual=$actual;attempt=$attempt}}
+  }
+  return @{ok=$false;actual=(ReadUploadFileNameValue $fileName);attempt=3}
+}
+function SubmitFileNames($fileName,$quoted,$files){
+  $dialog=FocusContainingWindow $fileName
+  $write=WriteAndVerifyUploadFileNames $fileName $quoted $files
+  if(-not $write.ok){FocusContainingWindow $fileName|Out-Null;[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 250;throw "__UPLOAD_PATH_WRITE_FAILED__:The file picker did not contain every absolute reference path after 3 attempts. Actual value: $($write.actual)"}
+  [Windows.Forms.SendKeys]::SendWait('{ENTER}')
   for($i=0;$i -lt 32;$i++){Start-Sleep -Milliseconds 250;try{if(-not $dialog -or $dialog.Current.IsOffscreen){return $true}}catch{return $true}}
   return $false
 }
@@ -788,11 +811,14 @@ if($Action -eq 'read-marked-response'){
   throw "Timed out waiting for a complete marked ChatGPT text response after $timeoutSeconds seconds"
 }
 if($Action -eq 'upload'){
-  $quoted=($payload.files|ForEach-Object{'"'+$_+'"'}) -join ' '
+  $files=@($payload.files|ForEach-Object{[IO.Path]::GetFullPath([string]$_)})
+  if(-not $files.Count){throw '__UPLOAD_SOURCE_INVALID__:No reference image path was supplied'}
+  foreach($file in $files){if(-not [IO.File]::Exists($file)){throw "__UPLOAD_SOURCE_INVALID__:Reference image file does not exist on this computer: $file"}}
+  $quoted=($files|ForEach-Object{'"'+$_+'"'}) -join ' '
   $root=Root;$mode=EnsureChatModeAndAttachment $root;$root=Root
   if(-not $mode.ok){throw "__UPLOAD_ENTRY_NOT_READY__:Chat mode or attachment entry was not ready; $(GetUploadCompatibilitySummary $root)"}
   $existingFileName=FindVisibleEdgeOpenFileNameField
-  if($existingFileName){if(-not (SubmitFileNames $existingFileName $quoted)){CloseOpenDialog;throw '__UPLOAD_PICKER_NOT_READY__:The existing file picker did not accept the selected reference paths'};$attached=WaitForAttachments $payload.files.Count;Result @{ok=($attached -ge $payload.files.Count);incomplete=($attached -lt $payload.files.Count);reusedPicker=$true;attachmentCount=$attached}}
+  if($existingFileName){if(-not (SubmitFileNames $existingFileName $quoted $files)){CloseOpenDialog;throw '__UPLOAD_PICKER_NOT_READY__:The existing file picker did not accept the selected reference paths'};$attached=WaitForAttachments $files.Count;Result @{ok=($attached -ge $files.Count);incomplete=($attached -lt $files.Count);reusedPicker=$true;attachmentCount=$attached}}
   [Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 400
   $knownDialogHandles=@(VisibleOpenDialogHandles)
   $add=FindAttachmentButtonNearComposer $root
@@ -814,9 +840,9 @@ if($Action -eq 'upload'){
     if($visibleUpload){ClickUploadMenuItem $visibleUpload|Out-Null;$fileName=WaitForNewUploadFileNameField $knownDialogHandles 28}
   }
   if(-not $fileName){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:A new Edge file picker appeared but its file-name field was not available within 10 seconds'}
-  if(-not (SubmitFileNames $fileName $quoted)){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:The file picker did not accept the selected reference paths within 8 seconds'}
-  $attached=WaitForAttachments $payload.files.Count
-  Result @{ok=($attached -ge $payload.files.Count);incomplete=($attached -lt $payload.files.Count);attachmentCount=$attached}
+  if(-not (SubmitFileNames $fileName $quoted $files)){CloseOpenDialog $knownDialogHandles;throw '__UPLOAD_PICKER_NOT_READY__:The file picker did not accept the selected reference paths within 8 seconds'}
+  $attached=WaitForAttachments $files.Count
+  Result @{ok=($attached -ge $files.Count);incomplete=($attached -lt $files.Count);attachmentCount=$attached}
 }
 if($Action -eq 'inspect-attach-menu'){
   [Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 150

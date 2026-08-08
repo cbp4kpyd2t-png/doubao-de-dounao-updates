@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Fixes the current ChatGPT attachment menu remaining open without launching Upload from computer. The uploader now prioritizes the precise Upload from computer row, clicks the visible text target instead of an unreliable popup parent, verifies that the Windows file picker actually opened, and performs one bounded precise retry when the first click misses.'
+  notes = 'Fixes remote computers opening the Edge installation directory while uploading references. Before upload, every source is normalized to an absolute path and verified as an existing file. After writing the picker, the app reads the File name field back and confirms every requested image name is present, retries with clipboard input when needed, and blocks prompt submission if the picker contains only a product or folder name.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

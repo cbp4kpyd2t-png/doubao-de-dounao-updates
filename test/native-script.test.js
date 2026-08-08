@@ -174,9 +174,13 @@ test('保存前持续观察缩略图并识别只有一张图片', () => {
 
 test('参考图一次提交全部路径并返回实际附件数量', () => {
   const upload = script.slice(script.indexOf("if($Action -eq 'upload')"), script.indexOf("if($Action -eq 'inspect-attach-menu')"));
-  assert.match(upload, /SubmitFileNames \$fileName \$quoted/);
-  assert.match(upload, /WaitForAttachments \$payload\.files\.Count/);
-  assert.match(upload, /incomplete=\(\$attached -lt \$payload\.files\.Count\)/);
+  assert.match(upload, /SubmitFileNames \$fileName \$quoted \$files/);
+  assert.match(upload, /WaitForAttachments \$files\.Count/);
+  assert.match(upload, /incomplete=\(\$attached -lt \$files\.Count\)/);
+  assert.match(script, /function WriteAndVerifyUploadFileNames/);
+  assert.match(script, /function UploadFileNameValueIsComplete/);
+  assert.match(upload, /__UPLOAD_SOURCE_INVALID__.*Reference image file does not exist/s);
+  assert.match(script, /__UPLOAD_PATH_WRITE_FAILED__/);
   assert.doesNotMatch(upload, /Reference upload incomplete/);
   assert.doesNotMatch(upload, /if\(SelectFilesInOpenDialog \$payload\.files\)\{Result/);
 });
