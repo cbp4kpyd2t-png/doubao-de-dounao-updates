@@ -164,7 +164,7 @@ function FindVisibleEdgeOpenDialog($knownHandles=@()){
   foreach($window in $desktop.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition)){
     try{
       if($window.Current.IsOffscreen -or $window.Current.ControlType.ProgrammaticName -notmatch 'Window' -or $window.Current.Name -notmatch "^Open$|^$openWord$"){continue}
-      $handle=[int64]$window.Current.NativeWindowHandle;if($knownHandles -contains $handle){continue};$field=FindVisibleByAutomationId $window '1148';if(-not $field){continue}
+      $handle=[int64]$window.Current.NativeWindowHandle;if($knownHandles -contains $handle){continue};$field=FindByAutomationId $window '1148';if(-not $field -or -not $field.Current.IsEnabled){continue}
       $owner=[int64][NativeWindow]::GetWindow([IntPtr]$handle,4);$rootOwner=[int64][NativeWindow]::GetAncestor([IntPtr]$handle,3);$pid=[int]$window.Current.ProcessId;$priority=9
       if($boundHandle -gt 0 -and ($owner -eq $boundHandle -or $rootOwner -eq $boundHandle)){$priority=0}
       elseif($edgePids -contains $pid){$priority=1}
@@ -174,7 +174,7 @@ function FindVisibleEdgeOpenDialog($knownHandles=@()){
   }
   if(-not $matches.Count){return $null};return ($matches|Sort-Object priority|Select-Object -First 1).element
 }
-function FindVisibleEdgeOpenFileNameField($knownHandles=@()){ $dialog=FindVisibleEdgeOpenDialog $knownHandles;if(-not $dialog){return $null};return FindVisibleByAutomationId $dialog '1148' }
+function FindVisibleEdgeOpenFileNameField($knownHandles=@()){ $dialog=FindVisibleEdgeOpenDialog $knownHandles;if(-not $dialog){return $null};$field=FindByAutomationId $dialog '1148';if($field -and $field.Current.IsEnabled){return $field};return $null }
 function FocusContainingWindow($el){
   $current=$el;$window=$null
   for($i=0;$i -lt 24 -and $current;$i++){try{if($current.Current.ControlType.ProgrammaticName -match 'Window'){$window=$current};$current=[Windows.Automation.TreeWalker]::RawViewWalker.GetParent($current)}catch{break}}
@@ -247,8 +247,8 @@ function SubmitFileNames($fileName,$quoted,$files){
   for($i=0;$i -lt 32;$i++){Start-Sleep -Milliseconds 250;if(UploadDialogShowsFiles $dialog $files){$directoryReady=$true;break}}
   if(-not $directoryReady){throw "__UPLOAD_DIRECTORY_NOT_READY__:The file picker entered the product directory but its reference images did not become selectable within 8 seconds: $($directories[0])"}
   $fileName=$null
-  for($i=0;$i -lt 24;$i++){$fileName=FindVisibleByAutomationId $dialog '1148';if($fileName){break};Start-Sleep -Milliseconds 250}
-  if(-not $fileName){return $true}
+  for($i=0;$i -lt 24;$i++){$fileName=FindByAutomationId $dialog '1148';if($fileName -and $fileName.Current.IsEnabled){break};$fileName=$null;Start-Sleep -Milliseconds 250}
+  if(-not $fileName){throw '__UPLOAD_PICKER_NOT_READY__:The product directory opened but the native File name control could not be accessed; upload was not submitted'}
   $baseQuoted=($files|ForEach-Object{'"'+[IO.Path]::GetFileName([string]$_)+'"'}) -join ' '
   $write=WriteAndVerifyUploadFileNames $fileName $baseQuoted $files
   if(-not $write.ok){FocusContainingWindow $fileName|Out-Null;[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 250;throw "__UPLOAD_PATH_WRITE_FAILED__:The file picker did not contain every absolute reference path after 3 attempts. Actual value: $($write.actual)"}

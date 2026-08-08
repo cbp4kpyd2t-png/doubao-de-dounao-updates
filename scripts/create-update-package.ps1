@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Fixes Windows file pickers that navigate into the correct product folder but leave all reference images unselected. Upload now uses a verified two-step picker flow: enter the product directory, wait until its image files are visible, then submit the image basenames. References located in different directories are grouped and uploaded in separate verified batches while preserving the cumulative attachment count.'
+  notes = 'Fixes the remote file picker falsely reporting upload success when its File name field is below the visible screen area. The uploader now locates the native File name control by automation ID even when Windows marks it offscreen, writes the selected image basenames through the control value interface, and treats an inaccessible field as a hard upload failure instead of leaving the picker open and continuing.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8
