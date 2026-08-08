@@ -237,6 +237,11 @@ test('上传前强制验证Chat模式并兼容当前Edge进程组的新文件窗
   assert.match(script, /SelectionItemPattern/);
   assert.match(script, /ControlViewWalker\.GetParent\(\$current\)/);
   assert.match(script, /if\(SelectVisibleUploadFilesAndOpen \$dialog \$files\)\{return \$true\}/);
+  assert.match(script, /function SubmitOpenDialogByWindowMessages/);
+  assert.match(script, /FindOpenFileNameControl/);
+  assert.match(script, /SetDialogText/);
+  assert.match(script, /ClickDialogButton/);
+  assert.match(script, /if\(SubmitOpenDialogByWindowMessages \$dialog \$baseQuoted\)\{return \$true\}/);
 });
 
 test('附件不完整时支持删除全部附件后重传', () => {

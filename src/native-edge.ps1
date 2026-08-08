@@ -11,6 +11,7 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class NativeWindow {
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
@@ -18,6 +19,43 @@ public static class NativeWindow {
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc callback, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder className, int maxCount);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, string lParam, uint flags, uint timeout, out IntPtr result);
+  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+  public static IntPtr FindOpenFileNameControl(IntPtr dialog) {
+    IntPtr exact = IntPtr.Zero, fallback = IntPtr.Zero;
+    EnumChildWindows(dialog, delegate(IntPtr child, IntPtr state) {
+      int id = GetDlgCtrlID(child);
+      var name = new System.Text.StringBuilder(128); GetClassName(child, name, name.Capacity);
+      string cls = name.ToString();
+      if ((id == 1148 || id == 1001) && cls.IndexOf("Edit", StringComparison.OrdinalIgnoreCase) >= 0) exact = child;
+      else if ((id == 1148 || id == 1001) && fallback == IntPtr.Zero) fallback = child;
+      return exact == IntPtr.Zero;
+    }, IntPtr.Zero);
+    IntPtr host = exact != IntPtr.Zero ? exact : fallback;
+    if (host == IntPtr.Zero) return IntPtr.Zero;
+    IntPtr edit = IntPtr.Zero;
+    EnumChildWindows(host, delegate(IntPtr child, IntPtr state) {
+      var name = new System.Text.StringBuilder(128); GetClassName(child, name, name.Capacity);
+      if (name.ToString().IndexOf("Edit", StringComparison.OrdinalIgnoreCase) >= 0) { edit = child; return false; }
+      return true;
+    }, IntPtr.Zero);
+    return edit != IntPtr.Zero ? edit : host;
+  }
+  public static IntPtr FindOpenButton(IntPtr dialog) {
+    IntPtr button = IntPtr.Zero;
+    EnumChildWindows(dialog, delegate(IntPtr child, IntPtr state) {
+      if (GetDlgCtrlID(child) != 1) return true;
+      var name = new System.Text.StringBuilder(128); GetClassName(child, name, name.Capacity);
+      if (name.ToString().IndexOf("Button", StringComparison.OrdinalIgnoreCase) >= 0) { button = child; return false; }
+      return true;
+    }, IntPtr.Zero);
+    return button;
+  }
+  public static bool SetDialogText(IntPtr control, string text) { IntPtr result; return SendMessageTimeout(control, 0x000C, IntPtr.Zero, text, 0x0002, 3000, out result) != IntPtr.Zero; }
+  public static bool ClickDialogButton(IntPtr button) { IntPtr result; return SendMessageTimeout(button, 0x00F5, IntPtr.Zero, IntPtr.Zero, 0x0002, 3000, out result) != IntPtr.Zero; }
 }
 '@
 
@@ -286,6 +324,16 @@ function SelectVisibleUploadFilesAndOpen($dialog,$files){
   for($i=0;$i -lt 32;$i++){Start-Sleep -Milliseconds 250;try{if($dialog.Current.IsOffscreen){return $true}}catch{return $true}}
   return $false
 }
+function SubmitOpenDialogByWindowMessages($dialog,$text){
+  try{$handle=[IntPtr][int64]$dialog.Current.NativeWindowHandle}catch{return $false}
+  if($handle -eq [IntPtr]::Zero){return $false}
+  $field=[NativeWindow]::FindOpenFileNameControl($handle);if($field -eq [IntPtr]::Zero){return $false}
+  if(-not [NativeWindow]::SetDialogText($field,$text)){return $false};Start-Sleep -Milliseconds 300
+  $open=[NativeWindow]::FindOpenButton($handle);if($open -eq [IntPtr]::Zero){return $false}
+  if(-not [NativeWindow]::ClickDialogButton($open)){return $false}
+  for($i=0;$i -lt 32;$i++){Start-Sleep -Milliseconds 250;try{if($dialog.Current.IsOffscreen){return $true}}catch{return $true}}
+  return $false
+}
 function SubmitFileNames($fileName,$quoted,$files){
   $dialog=FocusContainingWindow $fileName
   $directories=@($files|ForEach-Object{[IO.Path]::GetDirectoryName([string]$_)}|Select-Object -Unique)
@@ -302,11 +350,12 @@ function SubmitFileNames($fileName,$quoted,$files){
   # Prefer the file items themselves. This does not depend on the File name box
   # being visible, which is important on remote PCs with a short screen where
   # the bottom of the common dialog is outside the desktop work area.
+  $baseQuoted=($files|ForEach-Object{'"'+[IO.Path]::GetFileName([string]$_)+'"'}) -join ' '
+  if(SubmitOpenDialogByWindowMessages $dialog $baseQuoted){return $true}
   if(SelectVisibleUploadFilesAndOpen $dialog $files){return $true}
   $fileName=$null
   for($i=0;$i -lt 24;$i++){$fileName=FindOpenFileNameField $dialog;if($fileName){break};Start-Sleep -Milliseconds 250}
   if(-not $fileName){throw '__UPLOAD_PICKER_NOT_READY__:The product directory opened but the native File name control could not be accessed; upload was not submitted'}
-  $baseQuoted=($files|ForEach-Object{'"'+[IO.Path]::GetFileName([string]$_)+'"'}) -join ' '
   $write=WriteAndVerifyUploadFileNames $fileName $baseQuoted $files
   if(-not $write.ok){FocusContainingWindow $fileName|Out-Null;[Windows.Forms.SendKeys]::SendWait('{ESC}');Start-Sleep -Milliseconds 250;throw "__UPLOAD_PATH_WRITE_FAILED__:The file picker did not contain every absolute reference path after 3 attempts. Actual value: $($write.actual)"}
   [Windows.Forms.SendKeys]::SendWait('{ENTER}')
