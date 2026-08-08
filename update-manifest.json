@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.19",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.19/doubao-de-dounao-1.4.19-win-x64.zip",
-    "sha256":  "1b3233a25183a371b2bb9263acf6bf2936b6d5ed0ba11a6eabce5dd906b41fca",
-    "notes":  "Fixes reference uploads on computers where the Windows file picker belongs to an Edge child process instead of the main Edge process. The uploader binds newly opened pickers to the controlled Edge process group, brings the picker forward, submits absolute paths directly, and uses bounded adaptive waits instead of a 90-second stall. Slow computers also receive longer bounded waits for Save As completion and saved files to appear, while fast saves continue immediately.",
-    "publishedAt":  "2026-08-08T08:29:22.0171019Z"
+    "version":  "1.4.20",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.20/doubao-de-dounao-1.4.20-win-x64.zip",
+    "sha256":  "60a30850b2d4c538e3e6313161a445eb8c159133119cc72469bcd28d4b00ff11",
+    "notes":  "Fixes the current ChatGPT attachment menu remaining open without launching Upload from computer. The uploader now prioritizes the precise Upload from computer row, clicks the visible text target instead of an unreliable popup parent, verifies that the Windows file picker actually opened, and performs one bounded precise retry when the first click misses.",
+    "publishedAt":  "2026-08-08T09:26:50.6992351Z"
 }
