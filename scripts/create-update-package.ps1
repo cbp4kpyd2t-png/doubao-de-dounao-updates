@@ -21,7 +21,7 @@ $manifest = [ordered]@{
   version = $packageJson.version
   package = "$releaseBaseUrl/v$($packageJson.version)/$zipName"
   sha256 = $hash
-  notes = 'Fixes remote computers opening the Edge installation directory while uploading references. Before upload, every source is normalized to an absolute path and verified as an existing file. After writing the picker, the app reads the File name field back and confirms every requested image name is present, retries with clipboard input when needed, and blocks prompt submission if the picker contains only a product or folder name.'
+  notes = 'Fixes Windows file pickers that navigate into the correct product folder but leave all reference images unselected. Upload now uses a verified two-step picker flow: enter the product directory, wait until its image files are visible, then submit the image basenames. References located in different directories are grouped and uploaded in separate verified batches while preserving the cumulative attachment count.'
   publishedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'update-manifest.json') -Encoding UTF8

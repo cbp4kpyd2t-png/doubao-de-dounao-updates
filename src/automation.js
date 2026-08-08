@@ -119,9 +119,15 @@ class ChatGPTAutomation {
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         checkAbort();
         try {
-          const result = await runNative('upload', { files }, 90000);
-          checkAbort();
-          const attachmentCount = Math.max(0, Math.trunc(Number(result.attachmentCount) || 0));
+          const groups = [...files.reduce((map, file) => { const directory = path.dirname(path.resolve(file)); if (!map.has(directory)) map.set(directory, []); map.get(directory).push(path.resolve(file)); return map; }, new Map()).values()];
+          let attachmentCount = 0; let requestedTotal = 0;
+          for (const group of groups) {
+            requestedTotal += group.length;
+            const result = await runNative('upload', { files: group, expectedTotal: requestedTotal }, 90000);
+            checkAbort();
+            attachmentCount = Math.max(0, Math.trunc(Number(result.attachmentCount) || 0));
+            if (attachmentCount < requestedTotal) break;
+          }
           if (attachmentCount === 0) throw new Error(`应上传 ${files.length} 张，实际识别 0 张`);
           this.expectedAttachments = Math.min(files.length, attachmentCount);
           if (attachmentCount < files.length) {
