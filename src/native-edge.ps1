@@ -158,13 +158,42 @@ function VisibleOpenDialogHandles(){
   }
   return @($handles)
 }
+function FindOpenFileNameField($dialog){
+  if(-not $dialog){return $null}
+  foreach($automationId in @('1148','1001')){
+    $candidate=FindByAutomationId $dialog $automationId
+    if($candidate -and $candidate.Current.IsEnabled){
+      if($candidate.Current.ControlType.ProgrammaticName -match 'Edit' -or $candidate.Current.ClassName -match '^Edit$'){return $candidate}
+      foreach($child in (All $candidate)){
+        try{if($child.Current.IsEnabled -and ($child.Current.ControlType.ProgrammaticName -match 'Edit' -or $child.Current.ClassName -match '^Edit$')){return $child}}catch{}
+      }
+    }
+  }
+  $host=FindByAutomationId $dialog 'FileNameControlHost'
+  if($host){
+    foreach($child in (All $host)){
+      try{if($child.Current.IsEnabled -and ($child.Current.ControlType.ProgrammaticName -match 'Edit' -or $child.Current.ClassName -match '^Edit$')){return $child}}catch{}
+    }
+  }
+  $dialogRect=$dialog.Current.BoundingRectangle;$candidates=@()
+  foreach($candidate in (All $dialog)){
+    try{
+      $rect=$candidate.Current.BoundingRectangle
+      if($candidate.Current.IsEnabled -and ($candidate.Current.ControlType.ProgrammaticName -match 'Edit' -or $candidate.Current.ClassName -match '^Edit$') -and $rect.Width -ge 120 -and $rect.Y -gt ($dialogRect.Y+$dialogRect.Height*0.5)){
+        $candidates+=@{element=$candidate;rect=$rect}
+      }
+    }catch{}
+  }
+  if($candidates.Count){return ($candidates|Sort-Object {$_.rect.Y} -Descending|Select-Object -First 1).element}
+  return $null
+}
 function FindVisibleEdgeOpenDialog($knownHandles=@()){
   $boundHandle=PreferredWindowHandle;if($boundHandle -le 0){$edge=EdgeProcess;if($edge){$boundHandle=[int64]$edge.MainWindowHandle}}
   $edgePids=@(Get-Process msedge -ErrorAction SilentlyContinue|ForEach-Object{[int]$_.Id});$desktop=[Windows.Automation.AutomationElement]::RootElement;$matches=@()
   foreach($window in $desktop.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition)){
     try{
       if($window.Current.IsOffscreen -or $window.Current.ControlType.ProgrammaticName -notmatch 'Window' -or $window.Current.Name -notmatch "^Open$|^$openWord$"){continue}
-      $handle=[int64]$window.Current.NativeWindowHandle;if($knownHandles -contains $handle){continue};$field=FindByAutomationId $window '1148';if(-not $field -or -not $field.Current.IsEnabled){continue}
+      $handle=[int64]$window.Current.NativeWindowHandle;if($knownHandles -contains $handle){continue};$field=FindOpenFileNameField $window;if(-not $field){continue}
       $owner=[int64][NativeWindow]::GetWindow([IntPtr]$handle,4);$rootOwner=[int64][NativeWindow]::GetAncestor([IntPtr]$handle,3);$pid=[int]$window.Current.ProcessId;$priority=9
       if($boundHandle -gt 0 -and ($owner -eq $boundHandle -or $rootOwner -eq $boundHandle)){$priority=0}
       elseif($edgePids -contains $pid){$priority=1}
@@ -174,7 +203,7 @@ function FindVisibleEdgeOpenDialog($knownHandles=@()){
   }
   if(-not $matches.Count){return $null};return ($matches|Sort-Object priority|Select-Object -First 1).element
 }
-function FindVisibleEdgeOpenFileNameField($knownHandles=@()){ $dialog=FindVisibleEdgeOpenDialog $knownHandles;if(-not $dialog){return $null};$field=FindByAutomationId $dialog '1148';if($field -and $field.Current.IsEnabled){return $field};return $null }
+function FindVisibleEdgeOpenFileNameField($knownHandles=@()){ $dialog=FindVisibleEdgeOpenDialog $knownHandles;if(-not $dialog){return $null};return (FindOpenFileNameField $dialog) }
 function FocusContainingWindow($el){
   $current=$el;$window=$null
   for($i=0;$i -lt 24 -and $current;$i++){try{if($current.Current.ControlType.ProgrammaticName -match 'Window'){$window=$current};$current=[Windows.Automation.TreeWalker]::RawViewWalker.GetParent($current)}catch{break}}
@@ -233,6 +262,22 @@ function WriteAndVerifyUploadFileNames($fileName,$quoted,$files){
   }
   return @{ok=$false;actual=(ReadUploadFileNameValue $fileName);attempt=3}
 }
+function SelectVisibleUploadFilesAndOpen($dialog,$files){
+  $selected=0
+  foreach($file in $files){
+    $name=[IO.Path]::GetFileName([string]$file);$stem=[IO.Path]::GetFileNameWithoutExtension([string]$file);$item=$null
+    foreach($element in (All $dialog)){
+      try{if($element.Current.IsEnabled -and $element.Current.Name -in @($name,$stem) -and $element.Current.ControlType.ProgrammaticName -match 'ListItem|DataItem'){$item=$element;break}}catch{}
+    }
+    if(-not $item){return $false}
+    try{$selection=$item.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern);if($selected -eq 0){$selection.Select()}else{$selection.AddToSelection()};$selected++}catch{return $false}
+  }
+  if($selected -ne $files.Count){return $false}
+  $open=FindByName $dialog "^Open$|^$openWord$" 'Button';if(-not $open){$open=FindByAutomationId $dialog '1'};if(-not $open){return $false}
+  if(-not (InvokeElement $open)){return $false}
+  for($i=0;$i -lt 32;$i++){Start-Sleep -Milliseconds 250;try{if($dialog.Current.IsOffscreen){return $true}}catch{return $true}}
+  return $false
+}
 function SubmitFileNames($fileName,$quoted,$files){
   $dialog=FocusContainingWindow $fileName
   $directories=@($files|ForEach-Object{[IO.Path]::GetDirectoryName([string]$_)}|Select-Object -Unique)
@@ -246,8 +291,12 @@ function SubmitFileNames($fileName,$quoted,$files){
   $directoryReady=$false
   for($i=0;$i -lt 32;$i++){Start-Sleep -Milliseconds 250;if(UploadDialogShowsFiles $dialog $files){$directoryReady=$true;break}}
   if(-not $directoryReady){throw "__UPLOAD_DIRECTORY_NOT_READY__:The file picker entered the product directory but its reference images did not become selectable within 8 seconds: $($directories[0])"}
+  # Prefer the file items themselves. This does not depend on the File name box
+  # being visible, which is important on remote PCs with a short screen where
+  # the bottom of the common dialog is outside the desktop work area.
+  if(SelectVisibleUploadFilesAndOpen $dialog $files){return $true}
   $fileName=$null
-  for($i=0;$i -lt 24;$i++){$fileName=FindByAutomationId $dialog '1148';if($fileName -and $fileName.Current.IsEnabled){break};$fileName=$null;Start-Sleep -Milliseconds 250}
+  for($i=0;$i -lt 24;$i++){$fileName=FindOpenFileNameField $dialog;if($fileName){break};Start-Sleep -Milliseconds 250}
   if(-not $fileName){throw '__UPLOAD_PICKER_NOT_READY__:The product directory opened but the native File name control could not be accessed; upload was not submitted'}
   $baseQuoted=($files|ForEach-Object{'"'+[IO.Path]::GetFileName([string]$_)+'"'}) -join ' '
   $write=WriteAndVerifyUploadFileNames $fileName $baseQuoted $files

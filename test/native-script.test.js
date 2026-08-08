@@ -214,7 +214,9 @@ test('上传前强制验证Chat模式并兼容当前Edge进程组的新文件窗
   assert.match(script, /\^\(Chat\|聊天\)\$/);
   assert.match(script, /function EnsureChatModeAndAttachment/);
   assert.match(script, /function FindVisibleEdgeOpenDialog/);
-  assert.match(script, /\$field=FindByAutomationId \$window '1148'/);
+  assert.match(script, /\$field=FindOpenFileNameField \$window/);
+  assert.match(script, /function FindOpenFileNameField/);
+  assert.match(script, /foreach\(\$automationId in @\('1148','1001'\)\)/);
   assert.match(script, /\$edgePids -contains \$pid/);
   assert.match(script, /\$owner -eq \$boundHandle -or \$rootOwner -eq \$boundHandle/);
   assert.match(script, /\$knownHandles -contains \$handle/);
@@ -231,6 +233,9 @@ test('上传前强制验证Chat模式并兼容当前Edge进程组的新文件窗
   assert.doesNotMatch(upload, /FindVisibleByAutomationId \(\[Windows\.Automation\.AutomationElement\]::RootElement\) '1148'/);
   assert.doesNotMatch(script, /if\(-not \$fileName\)\{return \$true\}/);
   assert.match(script, /product directory opened but the native File name control could not be accessed/);
+  assert.match(script, /function SelectVisibleUploadFilesAndOpen/);
+  assert.match(script, /SelectionItemPattern/);
+  assert.match(script, /if\(SelectVisibleUploadFilesAndOpen \$dialog \$files\)\{return \$true\}/);
 });
 
 test('附件不完整时支持删除全部附件后重传', () => {
