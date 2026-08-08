@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.4.22",
-    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.22/doubao-de-dounao-1.4.22-win-x64.zip",
-    "sha256":  "2f09f2efc35aa8e0027cd548ce305fdc8fea7790da3871053a7be0bf0f87445c",
-    "notes":  "Fixes Windows file pickers that navigate into the correct product folder but leave all reference images unselected. Upload now uses a verified two-step picker flow: enter the product directory, wait until its image files are visible, then submit the image basenames. References located in different directories are grouped and uploaded in separate verified batches while preserving the cumulative attachment count.",
-    "publishedAt":  "2026-08-08T10:54:04.1432027Z"
+    "version":  "1.4.23",
+    "package":  "https://github.com/cbp4kpyd2t-png/doubao-de-dounao-updates/releases/download/v1.4.23/doubao-de-dounao-1.4.23-win-x64.zip",
+    "sha256":  "9b1ee5d7bf2cafc66f7f64e393e6c16d420ba94fa149249fafda40bbd96cf7a2",
+    "notes":  "Fixes the remote file picker falsely reporting upload success when its File name field is below the visible screen area. The uploader now locates the native File name control by automation ID even when Windows marks it offscreen, writes the selected image basenames through the control value interface, and treats an inaccessible field as a hard upload failure instead of leaving the picker open and continuing.",
+    "publishedAt":  "2026-08-08T11:30:42.1296931Z"
 }
