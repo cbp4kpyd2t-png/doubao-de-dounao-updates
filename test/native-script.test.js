@@ -235,6 +235,7 @@ test('上传前强制验证Chat模式并兼容当前Edge进程组的新文件窗
   assert.match(script, /product directory opened but the native File name control could not be accessed/);
   assert.match(script, /function SelectVisibleUploadFilesAndOpen/);
   assert.match(script, /SelectionItemPattern/);
+  assert.match(script, /ControlViewWalker\.GetParent\(\$current\)/);
   assert.match(script, /if\(SelectVisibleUploadFilesAndOpen \$dialog \$files\)\{return \$true\}/);
 });
 

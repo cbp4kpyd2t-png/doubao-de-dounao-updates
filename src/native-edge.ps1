@@ -265,12 +265,20 @@ function WriteAndVerifyUploadFileNames($fileName,$quoted,$files){
 function SelectVisibleUploadFilesAndOpen($dialog,$files){
   $selected=0
   foreach($file in $files){
-    $name=[IO.Path]::GetFileName([string]$file);$stem=[IO.Path]::GetFileNameWithoutExtension([string]$file);$item=$null
+    $name=[IO.Path]::GetFileName([string]$file);$stem=[IO.Path]::GetFileNameWithoutExtension([string]$file);$item=$null;$selection=$null
     foreach($element in (All $dialog)){
-      try{if($element.Current.IsEnabled -and $element.Current.Name -in @($name,$stem) -and $element.Current.ControlType.ProgrammaticName -match 'ListItem|DataItem'){$item=$element;break}}catch{}
+      try{
+        if($element.Current.Name -notin @($name,$stem)){continue}
+        $current=$element
+        for($depth=0;$depth -lt 8 -and $current;$depth++){
+          try{$candidatePattern=$current.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern);if($candidatePattern -and $current.Current.IsEnabled){$item=$current;$selection=$candidatePattern;break}}catch{}
+          try{$current=[Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($current)}catch{$current=$null}
+        }
+        if($selection){break}
+      }catch{}
     }
-    if(-not $item){return $false}
-    try{$selection=$item.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern);if($selected -eq 0){$selection.Select()}else{$selection.AddToSelection()};$selected++}catch{return $false}
+    if(-not $item -or -not $selection){return $false}
+    try{if($selected -eq 0){$selection.Select()}else{$selection.AddToSelection()};$selected++}catch{return $false}
   }
   if($selected -ne $files.Count){return $false}
   $open=FindByName $dialog "^Open$|^$openWord$" 'Button';if(-not $open){$open=FindByAutomationId $dialog '1'};if(-not $open){return $false}
